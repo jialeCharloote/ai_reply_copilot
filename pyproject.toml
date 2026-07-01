@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ai-reply-copilot"
 version = "0.0.1"
-description = "Mac desktop AI Reply Copilot — iMessage/Slack context reader and reply generator (MVP prototype)"
+description = "Charla — Mac desktop reply copilot: iMessage/Slack context reader and reply generator (MVP prototype)"
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [{ name = "Charlotte" }]
@@ -16,7 +16,7 @@ dependencies = []
 dev = ["pytest>=7.0"]
 
 [project.scripts]
-reply-copilot = "ai_reply_copilot.cli:main"
+charla = "ai_reply_copilot.cli:main"
 
 [tool.setuptools]
 packages = ["ai_reply_copilot"]

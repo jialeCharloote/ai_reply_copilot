@@ -1,7 +1,8 @@
-# AI Reply Copilot
+# Charla
 
 Mac desktop copilot that reads the current iMessage/Slack conversation and
-drafts replies in your voice. See [prd_en.md](prd_en.md) / [prd_zh.md](prd_zh.md)
+drafts replies in your voice. The name comes from Charlotte (the founder) and
+means "a chat" in Spanish. See [prd_en.md](prd_en.md) / [prd_zh.md](prd_zh.md)
 for the full product spec, and [positioning.md](positioning.md) for the
 users & go-to-market positioning.
 
@@ -46,35 +47,35 @@ pip install -e ".[dev]"
 
 ```bash
 # List recently active conversations (shows chat IDs)
-reply-copilot list
-reply-copilot list --limit 10
+charla list
+charla list --limit 10
 
 # Show recent context for a conversation by its chat ID
-reply-copilot show 42
-reply-copilot show 42 --limit 30
+charla show 42
+charla show 42 --limit 30
 
 # Point at a test database instead of the real chat.db
-reply-copilot list --db /path/to/test/chat.db
+charla list --db /path/to/test/chat.db
 
 # Generate 3 reply candidates for an iMessage conversation
 export OPENAI_API_KEY=sk-...
-reply-copilot suggest 42
-reply-copilot suggest 42 --intent decline --tone professional
-reply-copilot suggest 42 --draft "I can't make the meeting" --provider anthropic
+charla suggest 42
+charla suggest 42 --intent decline --tone professional
+charla suggest 42 --draft "I can't make the meeting" --provider anthropic
 
 # Slack (read-only)
 export SLACK_BOT_TOKEN=xoxb-...
-reply-copilot slack-list
-reply-copilot slack-show C0123456789
-reply-copilot suggest C0123456789 --source slack --tone friendly
+charla slack-list
+charla slack-show C0123456789
+charla suggest C0123456789 --source slack --tone friendly
 
 # Send a reviewed reply (asks to confirm; --dry-run previews)
-reply-copilot send --to "+15551234567" --text "Sounds good, see you at 7!"
-reply-copilot send --source slack --to C0123456789 --text "On it" --dry-run
+charla send --to "+15551234567" --text "Sounds good, see you at 7!"
+charla send --source slack --to C0123456789 --text "On it" --dry-run
 
 # End-to-end: read a conversation, get candidates, pick/edit, then send
-reply-copilot reply 42 --tone friendly
-reply-copilot reply C0123456789 --source slack --intent follow_up --dry-run
+charla reply 42 --tone friendly
+charla reply C0123456789 --source slack --intent follow_up --dry-run
 ```
 
 In `reply`, pick a candidate by number, type `e<n>` to edit one before
@@ -82,12 +83,12 @@ sending, or `q` to cancel. You confirm before anything is sent.
 
 ```bash
 # Personal style profile (local-first; applied automatically to suggestions)
-reply-copilot profile set --formality casual --no-emoji --language 中英双语
-reply-copilot profile show
-reply-copilot suggest 42 --ignore-profile   # opt out for one run
+charla profile set --formality casual --no-emoji --language 中英双语
+charla profile show
+charla suggest 42 --ignore-profile   # opt out for one run
 
 # Feedback on a reply (stored locally as JSONL)
-reply-copilot feedback useful --text "Sounds good!" --source imessage --target 42
+charla feedback useful --text "Sounds good!" --source imessage --target 42
 # ratings: useful | too_ai | wrong_tone | not_safe | not_like_me
 ```
 

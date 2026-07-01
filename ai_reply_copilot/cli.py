@@ -1,12 +1,12 @@
-"""Command-line interface for the iMessage reader prototype.
+"""Command-line interface for Charla.
 
 Examples::
 
-    reply-copilot list
-    reply-copilot list --limit 10
-    reply-copilot show 42
-    reply-copilot show 42 --limit 30
-    reply-copilot list --db /path/to/test/chat.db
+    charla list
+    charla list --limit 10
+    charla show 42
+    charla show 42 --limit 30
+    charla list --db /path/to/test/chat.db
 """
 
 from __future__ import annotations
@@ -52,8 +52,8 @@ def _add_db_arg(parser: argparse.ArgumentParser) -> None:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="reply-copilot",
-        description="Read-only iMessage context reader (AI Reply Copilot MVP).",
+        prog="charla",
+        description="Charla — reads your current conversation and drafts replies in your voice.",
     )
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)

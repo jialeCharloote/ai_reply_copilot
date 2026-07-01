@@ -1,4 +1,6 @@
-# AI Reply Copilot MVP 产品需求文档（中文）
+# Charla MVP 产品需求文档（中文）
+
+产品名：**Charla**（源自 Charlotte，西班牙语意为"聊天"；曾用名 AI Reply Copilot）
 
 创建日期：2026-06-17
 状态：Draft
@@ -8,7 +10,7 @@ Owner：Charlotte
 
 ## 1. 一句话概述
 
-AI Reply Copilot 是一个 **Mac 桌面伴随应用**：它在你的 Mac 上直接读取 iMessage 和 Slack 的对话上下文，理解你正在进行的这段会话，用你本人的语气生成 3 条回复候选，你挑一条、按需编辑后，直接发送或回填到输入框。
+Charla 是一个 **Mac 桌面伴随应用**：它在你的 Mac 上直接读取 iMessage 和 Slack 的对话上下文，理解你正在进行的这段会话，用你本人的语气生成 3 条回复候选，你挑一条、按需编辑后，直接发送或回填到输入框。
 
 第一个 MVP 聚焦 **iMessage + Slack** 两个渠道。手机截图 / OCR 流不取消，但降为后续/辅助路径（见第 10、15 节）。底层管道与 OpenClaw 同源（在 Mac 上读 `chat.db`、用 Messages 自动化发送、用 Slack 官方 API），但产品形态不同：OpenClaw 是一个你去对话的 Bot/网关，本产品是一个"帮我以我的语气回这段对话"的 Copilot。
 

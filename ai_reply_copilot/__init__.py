@@ -1,4 +1,4 @@
-"""AI Reply Copilot — MVP prototype.
+"""Charla — MVP prototype.
 
 Local-first Mac desktop copilot that reads the current iMessage/Slack
 conversation and drafts replies in the user's voice. This package currently

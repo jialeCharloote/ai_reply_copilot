@@ -1,4 +1,6 @@
-# AI Reply Copilot MVP PRD
+# Charla MVP PRD
+
+Product name: **Charla** (from Charlotte; "a chat" in Spanish; formerly AI Reply Copilot)
 
 Created: 2026-06-17
 Status: Draft
@@ -7,7 +9,7 @@ Target folder: `side_projects/ai_reply_copilot/`
 
 ## 1. Executive Summary
 
-AI Reply Copilot is a **Mac desktop companion app**: it reads your iMessage and Slack conversation context directly on your Mac, understands the conversation you are in, drafts 3 reply candidates in your own voice, and lets you pick one, edit it, and send it (or drop it into the input field) right away.
+Charla is a **Mac desktop companion app**: it reads your iMessage and Slack conversation context directly on your Mac, understands the conversation you are in, drafts 3 reply candidates in your own voice, and lets you pick one, edit it, and send it (or drop it into the input field) right away.
 
 The first MVP focuses on **iMessage + Slack**. The mobile screenshot/OCR flow is not dropped, but demoted to a later/auxiliary path (see sections 9 and 14). The underlying plumbing is the same one OpenClaw uses (read `chat.db` on the Mac, send via Messages automation, use the official Slack API), but the product shape differs: OpenClaw is a bot/gateway you talk to, while this product is a copilot that drafts a reply to the conversation in your own voice.
 

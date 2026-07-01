@@ -60,7 +60,7 @@ class StyleProfile:
 
 def build_system_prompt(num_candidates: int = 3) -> str:
     return (
-        "You are AI Reply Copilot, a Mac assistant that drafts replies in the "
+        "You are Charla, a Mac assistant that drafts replies in the "
         "user's own voice for their current iMessage/Slack conversation. The "
         "user will read, edit, and send the reply themselves.\n\n"
         "Rules:\n"
