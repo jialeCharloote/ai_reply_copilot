@@ -80,6 +80,33 @@ def test_cli_suggest(chat_db, capsys, monkeypatch):
     assert "3. 7 works!" in out
 
 
+def test_cli_suggest_no_target_uses_most_recent(chat_db, capsys, monkeypatch):
+    fake = FakeClient(
+        json.dumps({"understanding": "Boss asks for review.", "candidates": ["On it", "Will do", "Sure"]})
+    )
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake)
+    code = cli.main(["suggest", "--db", str(chat_db)])
+    out = capsys.readouterr().out
+    assert code == 0
+    # Chat 20 (boss@work.com) has the most recent message in the fixture.
+    assert "Using most recent conversation: boss@work.com" in out
+    _, user = fake.calls[0]
+    assert "Can you review the deck before EOD?" in user
+
+
+def test_cli_reply_no_target_uses_most_recent(chat_db, capsys, monkeypatch):
+    fake = FakeClient(
+        json.dumps({"understanding": "x", "candidates": ["A", "B", "C"]})
+    )
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake)
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    code = cli.main(["reply", "--db", str(chat_db), "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Using most recent conversation: boss@work.com" in out
+    assert "not sent" in out
+
+
 def test_cli_slack_list(capsys, monkeypatch):
     fake = _fake_slack()
     monkeypatch.setattr(cli, "SlackClient", lambda: fake)

@@ -83,7 +83,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_suggest.add_argument(
         "target",
-        help="iMessage chat ROWID (from `list`) or Slack channel ID with --source slack",
+        nargs="?",
+        default=None,
+        help="iMessage chat ROWID (from `list`) or Slack channel ID with "
+        "--source slack; defaults to the most recent conversation",
     )
     p_suggest.add_argument(
         "--source",
@@ -146,7 +149,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_reply.add_argument(
         "target",
-        help="iMessage chat ROWID or Slack channel ID (with --source slack)",
+        nargs="?",
+        default=None,
+        help="iMessage chat ROWID or Slack channel ID (with --source slack); "
+        "defaults to the most recent conversation",
     )
     p_reply.add_argument(
         "--source", choices=["imessage", "slack"], default="imessage"
@@ -255,18 +261,42 @@ def _cmd_slack_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _resolve_target(args: argparse.Namespace) -> Optional[str]:
+    """Return the explicit target, or fall back to the most recent conversation."""
+    if args.target is not None:
+        return args.target
+    if args.source == "slack":
+        conversations = slack_reader.list_conversations(SlackClient(), limit=1)
+        if not conversations:
+            print("No Slack conversations found.")
+            return None
+        convo = conversations[0]
+        print(f"Using most recent conversation: {convo.title}")
+        return convo.channel_id
+    conversations = list_conversations(db_path=args.db, limit=1)
+    if not conversations:
+        print("No conversations found.")
+        return None
+    convo = conversations[0]
+    print(f"Using most recent conversation: {convo.title}")
+    return str(convo.chat_id)
+
+
 def _cmd_suggest(args: argparse.Namespace) -> int:
+    target = _resolve_target(args)
+    if target is None:
+        return 0
     if args.source == "slack":
         slack_client = SlackClient()
         messages = slack_reader.get_conversation_context(
-            slack_client, channel_id=args.target, limit=args.limit
+            slack_client, channel_id=target, limit=args.limit
         )
     else:
         messages = get_conversation_context(
-            chat_id=int(args.target), db_path=args.db, limit=args.limit
+            chat_id=int(target), db_path=args.db, limit=args.limit
         )
     if not messages:
-        print(f"No messages found for {args.source} target {args.target}.")
+        print(f"No messages found for {args.source} target {target}.")
         return 0
 
     client = get_client(provider=args.provider, model=args.model)
@@ -314,17 +344,20 @@ def _cmd_send(args: argparse.Namespace) -> int:
 
 
 def _cmd_reply(args: argparse.Namespace) -> int:
+    target = _resolve_target(args)
+    if target is None:
+        return 0
     if args.source == "slack":
         slack_client = SlackClient()
         messages = slack_reader.get_conversation_context(
-            slack_client, channel_id=args.target, limit=args.limit
+            slack_client, channel_id=target, limit=args.limit
         )
 
         def send_fn(text: str, dry_run: bool):
-            return send_slack(slack_client, args.target, text, dry_run=dry_run)
+            return send_slack(slack_client, target, text, dry_run=dry_run)
 
     else:
-        chat_id = int(args.target)
+        chat_id = int(target)
         messages = get_conversation_context(
             chat_id=chat_id, db_path=args.db, limit=args.limit
         )
@@ -337,7 +370,7 @@ def _cmd_reply(args: argparse.Namespace) -> int:
             return send_imessage(recipient, text, dry_run=dry_run)
 
     if not messages:
-        print(f"No messages found for {args.source} target {args.target}.")
+        print(f"No messages found for {args.source} target {target}.")
         return 0
 
     llm_client = get_client(provider=args.provider, model=args.model)
