@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import __version__
+from .generate import GenerationError, generate_replies
 from .imessage import (
     DEFAULT_CHAT_DB,
     ChatDatabaseError,
@@ -24,6 +25,8 @@ from .imessage import (
     list_conversations,
     render_context,
 )
+from .llm import LLMError, get_client
+from .prompts import INTENTS, TONES
 
 
 def _add_db_arg(parser: argparse.ArgumentParser) -> None:
@@ -51,6 +54,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("chat_id", type=int, help="Chat ROWID (from `list`)")
     p_show.add_argument("--limit", type=int, default=20, help="Max messages")
     _add_db_arg(p_show)
+
+    p_suggest = sub.add_parser(
+        "suggest", help="Generate reply candidates for a conversation"
+    )
+    p_suggest.add_argument("chat_id", type=int, help="Chat ROWID (from `list`)")
+    p_suggest.add_argument("--limit", type=int, default=20, help="Max messages")
+    p_suggest.add_argument(
+        "--intent", choices=sorted(INTENTS), help="What the reply should do"
+    )
+    p_suggest.add_argument(
+        "--tone", choices=sorted(TONES), help="How the reply should feel"
+    )
+    p_suggest.add_argument("--draft", help="What you roughly want to say")
+    p_suggest.add_argument(
+        "--provider",
+        choices=["openai", "anthropic"],
+        default="openai",
+        help="LLM provider (needs the matching API key env var)",
+    )
+    p_suggest.add_argument("--model", help="Override the default model")
+    p_suggest.add_argument(
+        "--num", type=int, default=3, help="Number of candidates (default 3)"
+    )
+    _add_db_arg(p_suggest)
 
     return parser
 
@@ -86,6 +113,31 @@ def _cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_suggest(args: argparse.Namespace) -> int:
+    messages = get_conversation_context(
+        chat_id=args.chat_id, db_path=args.db, limit=args.limit
+    )
+    if not messages:
+        print(f"No messages found for chat {args.chat_id}.")
+        return 0
+
+    client = get_client(provider=args.provider, model=args.model)
+    suggestion = generate_replies(
+        messages,
+        client,
+        intent=args.intent,
+        tone=args.tone,
+        draft=args.draft,
+        num_candidates=args.num,
+    )
+
+    if suggestion.understanding:
+        print(f"Understanding: {suggestion.understanding}\n")
+    for index, candidate in enumerate(suggestion.candidates, start=1):
+        print(f"{index}. {candidate}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -94,7 +146,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cmd_list(args)
         if args.command == "show":
             return _cmd_show(args)
-    except ChatDatabaseError as exc:
+        if args.command == "suggest":
+            return _cmd_suggest(args)
+    except (ChatDatabaseError, LLMError, GenerationError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     parser.error(f"unknown command: {args.command}")
