@@ -471,7 +471,7 @@ Week 6:
 
 ## 21. Open Questions
 
-- Which first wedge should dominate the brand: professional replies, awkward social replies, bilingual replies, or dating?
+- ~~Which first wedge should dominate the brand?~~ **Decided (2026-07-01): professional + bilingual replies as the first wedge; dating is a growth hook, not the core brand.** See positioning.md.
 - Which channel should be the first to ship in week 1: iMessage or Slack?
 - Should the desktop shell be native Swift or Tauri/Electron?
 - Default send behavior: one-tap direct send, or default to insert and require one more tap to send?
