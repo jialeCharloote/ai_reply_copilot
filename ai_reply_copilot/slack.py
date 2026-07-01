@@ -81,6 +81,32 @@ class SlackClient:
             raise SlackError(f"Slack API error on {method}: {data.get('error')}")
         return data
 
+    def post(self, method: str, payload: dict) -> dict:
+        if not self.token:
+            raise SlackError("SLACK_BOT_TOKEN is not set.")
+        url = f"{SLACK_API_BASE}/{method}"
+        data = json.dumps(payload).encode("utf-8")
+        request = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {self.token}",
+                "Content-Type": "application/json; charset=utf-8",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                result = json.loads(response.read().decode("utf-8"))
+        except urllib.error.URLError as exc:  # pragma: no cover - network dependent
+            raise SlackError(f"Could not reach Slack: {exc}") from exc
+        if not result.get("ok"):
+            raise SlackError(f"Slack API error on {method}: {result.get('error')}")
+        return result
+
+    def post_message(self, channel: str, text: str) -> dict:
+        return self.post("chat.postMessage", {"channel": channel, "text": text})
+
     def auth_user_id(self) -> Optional[str]:
         if self._auth_user_id is None:
             self._auth_user_id = self.call("auth.test").get("user_id")
@@ -114,12 +140,21 @@ class FakeSlackClient(SlackClient):
         super().__init__(token="fake-token")
         self._responses = responses
         self._auth_user_id = auth_user_id
+        self.posted = []
 
     def call(self, method: str, params: Optional[dict] = None) -> dict:
         if method not in self._responses:
             raise SlackError(f"Slack API error on {method}: not_configured")
         handler = self._responses[method]
         data = handler(params or {}) if callable(handler) else handler
+        if not data.get("ok", True):
+            raise SlackError(f"Slack API error on {method}: {data.get('error')}")
+        return data
+
+    def post(self, method: str, payload: dict) -> dict:
+        self.posted.append((method, payload))
+        handler = self._responses.get(method, {"ok": True, "ts": "1000.0001"})
+        data = handler(payload) if callable(handler) else handler
         if not data.get("ok", True):
             raise SlackError(f"Slack API error on {method}: {data.get('error')}")
         return data

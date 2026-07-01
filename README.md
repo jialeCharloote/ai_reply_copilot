@@ -4,8 +4,8 @@ Mac desktop copilot that reads the current iMessage/Slack conversation and
 drafts replies in your voice. See [prd_en.md](prd_en.md) / [prd_zh.md](prd_zh.md)
 for the full product spec.
 
-**Status:** Week 1–3 prototype — read-only iMessage + Slack readers + reply
-generation.
+**Status:** Week 1–4 prototype — iMessage + Slack readers, reply generation,
+and a reviewed sending path.
 
 ## What works now
 
@@ -16,9 +16,11 @@ generation.
   channel context into the same message model.
 - Reply generation: turn a conversation (iMessage or Slack) into a one-line
   understanding plus 3 distinct reply candidates, with optional intent/tone/draft.
+- A sending path: send a reviewed reply via iMessage (Messages automation) or
+  Slack (`chat.postMessage`), with a confirmation prompt and `--dry-run`.
 
-Reading is strictly read-only: it never writes to `chat.db` and never posts to
-Slack. Generation drafts candidates for you to review, edit, and send yourself.
+Reading is strictly read-only. Sending always requires confirmation (or an
+explicit `--yes`) and only sends plain text — no private-API tricks.
 
 ## Requirements
 
@@ -61,6 +63,10 @@ export SLACK_BOT_TOKEN=xoxb-...
 reply-copilot slack-list
 reply-copilot slack-show C0123456789
 reply-copilot suggest C0123456789 --source slack --tone friendly
+
+# Send a reviewed reply (asks to confirm; --dry-run previews)
+reply-copilot send --to "+15551234567" --text "Sounds good, see you at 7!"
+reply-copilot send --source slack --to C0123456789 --text "On it" --dry-run
 ```
 
 You can also run it without installing:
@@ -82,7 +88,8 @@ anywhere without Full Disk Access or a real Messages history.
 
 1. ~~Prompt template + LLM call: turn rendered context into 3 reply candidates.~~ done
 2. ~~Slack context reader.~~ done
-3. Sending path (Messages automation / Slack API) with review-before-send.
-4. Personal style profile persistence and feedback loop.
+3. ~~Sending path (Messages automation / Slack API) with review-before-send.~~ done
+4. End-to-end interactive flow: read → suggest → pick → send in one command.
+5. Personal style profile persistence and feedback loop.
 
 See the 6-week roadmap in the PRD (section 21).

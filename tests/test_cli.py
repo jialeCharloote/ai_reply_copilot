@@ -114,3 +114,30 @@ def test_cli_suggest_slack_source(capsys, monkeypatch):
     # The Slack context should have reached the LLM.
     _, user = fake_llm.calls[0]
     assert "Deploy tonight?" in user
+
+
+def test_cli_send_imessage_dry_run(capsys):
+    code = cli.main(["send", "--to", "+1555", "--text", "hello", "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "About to send via imessage" in out
+    assert "not sent" in out
+
+
+def test_cli_send_slack_yes(capsys, monkeypatch):
+    fake = _fake_slack()
+    fake._responses["chat.postMessage"] = {"ok": True, "ts": "99.9"}
+    monkeypatch.setattr(cli, "SlackClient", lambda: fake)
+    code = cli.main(["send", "--source", "slack", "--to", "C1", "--text", "hi", "--yes"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert fake.posted == [("chat.postMessage", {"channel": "C1", "text": "hi"})]
+    assert "99.9" in out
+
+
+def test_cli_send_cancelled(capsys, monkeypatch):
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    code = cli.main(["send", "--to", "+1555", "--text", "hello"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "Cancelled." in out

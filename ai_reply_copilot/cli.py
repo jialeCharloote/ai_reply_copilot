@@ -28,6 +28,7 @@ from .imessage import (
 )
 from .llm import LLMError, get_client
 from .prompts import INTENTS, TONES
+from .send import SendError, send_imessage, send_slack
 from .slack import SlackClient, SlackError
 
 
@@ -100,6 +101,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--num", type=int, default=3, help="Number of candidates (default 3)"
     )
     _add_db_arg(p_suggest)
+
+    p_send = sub.add_parser(
+        "send", help="Send a reviewed reply (asks for confirmation first)"
+    )
+    p_send.add_argument(
+        "--source",
+        choices=["imessage", "slack"],
+        default="imessage",
+        help="Where to send",
+    )
+    p_send.add_argument(
+        "--to",
+        required=True,
+        help="iMessage recipient (phone/email) or Slack channel/DM ID",
+    )
+    p_send.add_argument("--text", required=True, help="The message text to send")
+    p_send.add_argument(
+        "--dry-run", action="store_true", help="Preview without sending"
+    )
+    p_send.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt (use with care)",
+    )
 
     return parser
 
@@ -198,6 +223,31 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
     return 0
 
 
+def _confirm(prompt: str) -> bool:
+    try:
+        answer = input(prompt).strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
+def _cmd_send(args: argparse.Namespace) -> int:
+    print(f"About to send via {args.source} to {args.to}:")
+    print(f"  {args.text}")
+    if not args.dry_run and not args.yes:
+        if not _confirm("Send this message? [y/N] "):
+            print("Cancelled.")
+            return 1
+
+    if args.source == "slack":
+        result = send_slack(SlackClient(), args.to, args.text, dry_run=args.dry_run)
+    else:
+        result = send_imessage(args.to, args.text, dry_run=args.dry_run)
+
+    print(result.detail)
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -212,7 +262,9 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cmd_slack_show(args)
         if args.command == "suggest":
             return _cmd_suggest(args)
-    except (ChatDatabaseError, LLMError, GenerationError, SlackError) as exc:
+        if args.command == "send":
+            return _cmd_send(args)
+    except (ChatDatabaseError, LLMError, GenerationError, SlackError, SendError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     except ValueError as exc:
