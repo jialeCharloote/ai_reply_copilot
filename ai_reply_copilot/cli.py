@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from . import __version__
+from . import slack as slack_reader
 from .generate import GenerationError, generate_replies
 from .imessage import (
     DEFAULT_CHAT_DB,
@@ -27,6 +28,7 @@ from .imessage import (
 )
 from .llm import LLMError, get_client
 from .prompts import INTENTS, TONES
+from .slack import SlackClient, SlackError
 
 
 def _add_db_arg(parser: argparse.ArgumentParser) -> None:
@@ -55,10 +57,30 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--limit", type=int, default=20, help="Max messages")
     _add_db_arg(p_show)
 
+    p_slack_list = sub.add_parser(
+        "slack-list", help="List recently active Slack channels/DMs"
+    )
+    p_slack_list.add_argument("--limit", type=int, default=20, help="Max channels")
+
+    p_slack_show = sub.add_parser(
+        "slack-show", help="Show recent context for a Slack channel/DM"
+    )
+    p_slack_show.add_argument("channel", help="Slack channel/DM ID (from slack-list)")
+    p_slack_show.add_argument("--limit", type=int, default=20, help="Max messages")
+
     p_suggest = sub.add_parser(
         "suggest", help="Generate reply candidates for a conversation"
     )
-    p_suggest.add_argument("chat_id", type=int, help="Chat ROWID (from `list`)")
+    p_suggest.add_argument(
+        "target",
+        help="iMessage chat ROWID (from `list`) or Slack channel ID with --source slack",
+    )
+    p_suggest.add_argument(
+        "--source",
+        choices=["imessage", "slack"],
+        default="imessage",
+        help="Where to read the conversation from",
+    )
     p_suggest.add_argument("--limit", type=int, default=20, help="Max messages")
     p_suggest.add_argument(
         "--intent", choices=sorted(INTENTS), help="What the reply should do"
@@ -113,12 +135,50 @@ def _cmd_show(args: argparse.Namespace) -> int:
     return 0
 
 
-def _cmd_suggest(args: argparse.Namespace) -> int:
-    messages = get_conversation_context(
-        chat_id=args.chat_id, db_path=args.db, limit=args.limit
+def _cmd_slack_list(args: argparse.Namespace) -> int:
+    client = SlackClient()
+    conversations = slack_reader.list_conversations(client, limit=args.limit)
+    if not conversations:
+        print("No Slack conversations found.")
+        return 0
+    for convo in conversations:
+        when = (
+            convo.last_message_at.strftime("%Y-%m-%d %H:%M")
+            if convo.last_message_at
+            else "?"
+        )
+        preview = convo.last_text
+        if len(preview) > 60:
+            preview = preview[:57] + "..."
+        print(f"{convo.channel_id:>12}  {when}  {convo.title}")
+        print(f"              {preview}")
+    return 0
+
+
+def _cmd_slack_show(args: argparse.Namespace) -> int:
+    client = SlackClient()
+    messages = slack_reader.get_conversation_context(
+        client, channel_id=args.channel, limit=args.limit
     )
     if not messages:
-        print(f"No messages found for chat {args.chat_id}.")
+        print(f"No messages found for channel {args.channel}.")
+        return 0
+    print(render_context(messages))
+    return 0
+
+
+def _cmd_suggest(args: argparse.Namespace) -> int:
+    if args.source == "slack":
+        slack_client = SlackClient()
+        messages = slack_reader.get_conversation_context(
+            slack_client, channel_id=args.target, limit=args.limit
+        )
+    else:
+        messages = get_conversation_context(
+            chat_id=int(args.target), db_path=args.db, limit=args.limit
+        )
+    if not messages:
+        print(f"No messages found for {args.source} target {args.target}.")
         return 0
 
     client = get_client(provider=args.provider, model=args.model)
@@ -146,9 +206,16 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cmd_list(args)
         if args.command == "show":
             return _cmd_show(args)
+        if args.command == "slack-list":
+            return _cmd_slack_list(args)
+        if args.command == "slack-show":
+            return _cmd_slack_show(args)
         if args.command == "suggest":
             return _cmd_suggest(args)
-    except (ChatDatabaseError, LLMError, GenerationError) as exc:
+    except (ChatDatabaseError, LLMError, GenerationError, SlackError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     parser.error(f"unknown command: {args.command}")

@@ -17,6 +17,20 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import List, Optional
 
+from .models import Message, render_context
+
+__all__ = [
+    "DEFAULT_CHAT_DB",
+    "ChatDatabaseError",
+    "Message",
+    "Conversation",
+    "apple_time_to_datetime",
+    "decode_attributed_body",
+    "list_conversations",
+    "get_conversation_context",
+    "render_context",
+]
+
 DEFAULT_CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
 
 # macOS stores message timestamps as (nano)seconds since 2001-01-01 UTC.
@@ -27,19 +41,6 @@ _NANOSECOND_THRESHOLD = 1e11
 
 class ChatDatabaseError(RuntimeError):
     """Raised when the chat database cannot be opened or read."""
-
-
-@dataclass
-class Message:
-    text: str
-    is_from_me: bool
-    timestamp: Optional[datetime]
-    sender: Optional[str]
-
-    def format_line(self) -> str:
-        who = "Me" if self.is_from_me else (self.sender or "Them")
-        when = self.timestamp.strftime("%Y-%m-%d %H:%M") if self.timestamp else "?"
-        return f"[{when}] {who}: {self.text}"
 
 
 @dataclass
@@ -204,8 +205,3 @@ def get_conversation_context(
         )
     messages.reverse()
     return messages
-
-
-def render_context(messages: List[Message]) -> str:
-    """Render messages as a plain-text transcript ready to feed to an LLM."""
-    return "\n".join(message.format_line() for message in messages)
