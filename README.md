@@ -2,7 +2,8 @@
 
 Mac desktop copilot that reads the current iMessage/Slack conversation and
 drafts replies in your voice. See [prd_en.md](prd_en.md) / [prd_zh.md](prd_zh.md)
-for the full product spec.
+for the full product spec, and [positioning.md](positioning.md) for the
+users & go-to-market positioning.
 
 **Status:** Working CLI core loop — iMessage + Slack readers, reply generation,
 a reviewed sending path, and an end-to-end `reply` command.
