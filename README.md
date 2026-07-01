@@ -20,6 +20,7 @@ a reviewed sending path, and an end-to-end `reply` command.
   Slack (`chat.postMessage`), with a confirmation prompt and `--dry-run`.
 - An end-to-end `reply` command that reads a conversation, generates candidates,
   lets you pick or edit one, and sends after confirmation — the PRD core loop.
+- Local-first personal style profile (applied to suggestions) and a feedback log.
 
 Reading is strictly read-only. Sending always requires confirmation (or an
 explicit `--yes`) and only sends plain text — no private-API tricks.
@@ -78,6 +79,20 @@ reply-copilot reply C0123456789 --source slack --intent follow_up --dry-run
 In `reply`, pick a candidate by number, type `e<n>` to edit one before
 sending, or `q` to cancel. You confirm before anything is sent.
 
+```bash
+# Personal style profile (local-first; applied automatically to suggestions)
+reply-copilot profile set --formality casual --no-emoji --language 中英双语
+reply-copilot profile show
+reply-copilot suggest 42 --ignore-profile   # opt out for one run
+
+# Feedback on a reply (stored locally as JSONL)
+reply-copilot feedback useful --text "Sounds good!" --source imessage --target 42
+# ratings: useful | too_ai | wrong_tone | not_safe | not_like_me
+```
+
+Local state lives under `~/.ai_reply_copilot/` (override with
+`AI_REPLY_COPILOT_HOME`). Nothing is uploaded; you can inspect or delete it.
+
 You can also run it without installing:
 
 ```bash
@@ -99,7 +114,7 @@ anywhere without Full Disk Access or a real Messages history.
 2. ~~Slack context reader.~~ done
 3. ~~Sending path (Messages automation / Slack API) with review-before-send.~~ done
 4. ~~End-to-end interactive flow: read → suggest → pick → send in one command.~~ done
-5. Personal style profile persistence and feedback loop.
+5. ~~Personal style profile persistence and feedback loop.~~ done
 6. Menu-bar / desktop shell (Swift or Tauri) around this core.
 
 See the 6-week roadmap in the PRD (section 21).

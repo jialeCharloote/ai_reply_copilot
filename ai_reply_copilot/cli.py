@@ -29,9 +29,16 @@ from .imessage import (
     render_context,
 )
 from .llm import LLMError, get_client
-from .prompts import INTENTS, TONES
+from .prompts import INTENTS, TONES, StyleProfile
 from .send import SendError, send_imessage, send_slack
 from .slack import SlackClient, SlackError
+from .storage import (
+    FEEDBACK_RATINGS,
+    load_style_profile,
+    profile_path,
+    record_feedback,
+    save_style_profile,
+)
 
 
 def _add_db_arg(parser: argparse.ArgumentParser) -> None:
@@ -102,6 +109,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_suggest.add_argument(
         "--num", type=int, default=3, help="Number of candidates (default 3)"
     )
+    p_suggest.add_argument(
+        "--ignore-profile",
+        action="store_true",
+        help="Do not apply the saved personal style profile",
+    )
     _add_db_arg(p_suggest)
 
     p_send = sub.add_parser(
@@ -150,7 +162,32 @@ def build_parser() -> argparse.ArgumentParser:
     p_reply.add_argument("--model", help="Override the default model")
     p_reply.add_argument("--dry-run", action="store_true", help="Preview without sending")
     p_reply.add_argument("--yes", action="store_true", help="Skip send confirmation")
+    p_reply.add_argument(
+        "--ignore-profile",
+        action="store_true",
+        help="Do not apply the saved personal style profile",
+    )
     _add_db_arg(p_reply)
+
+    p_profile = sub.add_parser("profile", help="View or set your personal style")
+    profile_sub = p_profile.add_subparsers(dest="profile_command", required=True)
+    profile_sub.add_parser("show", help="Show the saved style profile")
+    p_profile_set = profile_sub.add_parser("set", help="Update the style profile")
+    p_profile_set.add_argument("--formality", help="e.g. casual, formal")
+    p_profile_set.add_argument("--directness", help="e.g. direct, gentle")
+    p_profile_set.add_argument(
+        "--emoji", action=argparse.BooleanOptionalAction, help="Use emoji"
+    )
+    p_profile_set.add_argument(
+        "--concise", action=argparse.BooleanOptionalAction, help="Prefer concise"
+    )
+    p_profile_set.add_argument("--language", help="e.g. English, 中文, 中英双语")
+
+    p_feedback = sub.add_parser("feedback", help="Log feedback about a reply")
+    p_feedback.add_argument("rating", choices=list(FEEDBACK_RATINGS))
+    p_feedback.add_argument("--text", default="", help="The reply the feedback is about")
+    p_feedback.add_argument("--source", default="", help="imessage or slack")
+    p_feedback.add_argument("--target", default="", help="chat id / channel")
 
     return parser
 
@@ -233,11 +270,13 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
         return 0
 
     client = get_client(provider=args.provider, model=args.model)
+    style = None if args.ignore_profile else load_style_profile()
     suggestion = generate_replies(
         messages,
         client,
         intent=args.intent,
         tone=args.tone,
+        style=style,
         draft=args.draft,
         num_candidates=args.num,
     )
@@ -302,18 +341,55 @@ def _cmd_reply(args: argparse.Namespace) -> int:
         return 0
 
     llm_client = get_client(provider=args.provider, model=args.model)
+    style = None if args.ignore_profile else load_style_profile()
     result = run_reply_flow(
         messages,
         llm_client,
         send_fn,
         intent=args.intent,
         tone=args.tone,
+        style=style,
         draft=args.draft,
         num=args.num,
         dry_run=args.dry_run,
         auto_yes=args.yes,
     )
     return 0 if result is not None else 1
+
+
+def _cmd_profile(args: argparse.Namespace) -> int:
+    if args.profile_command == "show":
+        profile = load_style_profile()
+        if profile is None:
+            print("No style profile saved yet. Set one with `profile set`.")
+            return 0
+        described = profile.describe() or "(empty)"
+        print(f"Style profile ({profile_path()}):\n  {described}")
+        return 0
+
+    # set: merge provided fields onto the existing profile.
+    profile = load_style_profile() or StyleProfile()
+    if args.formality is not None:
+        profile.formality = args.formality
+    if args.directness is not None:
+        profile.directness = args.directness
+    if args.emoji is not None:
+        profile.use_emoji = args.emoji
+    if args.concise is not None:
+        profile.concise = args.concise
+    if args.language is not None:
+        profile.language = args.language
+    path = save_style_profile(profile)
+    print(f"Saved style profile to {path}:\n  {profile.describe() or '(empty)'}")
+    return 0
+
+
+def _cmd_feedback(args: argparse.Namespace) -> int:
+    path = record_feedback(
+        args.rating, text=args.text, source=args.source, target=args.target
+    )
+    print(f"Recorded '{args.rating}' feedback in {path}.")
+    return 0
 
 
 def main(argv: Optional[List[str]] = None) -> int:
@@ -334,6 +410,10 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cmd_send(args)
         if args.command == "reply":
             return _cmd_reply(args)
+        if args.command == "profile":
+            return _cmd_profile(args)
+        if args.command == "feedback":
+            return _cmd_feedback(args)
     except (ChatDatabaseError, LLMError, GenerationError, SlackError, SendError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

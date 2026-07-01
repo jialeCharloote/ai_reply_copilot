@@ -143,6 +143,42 @@ def test_cli_send_cancelled(capsys, monkeypatch):
     assert "Cancelled." in out
 
 
+def test_cli_profile_set_and_show(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    code = cli.main(["profile", "set", "--formality", "casual", "--no-emoji", "--language", "中文"])
+    assert code == 0
+    capsys.readouterr()
+    code = cli.main(["profile", "show"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "casual" in out
+    assert "no emoji" in out
+    assert "中文" in out
+
+
+def test_cli_feedback(capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    code = cli.main(["feedback", "useful", "--text", "Sounds good!", "--source", "imessage"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "Recorded 'useful'" in out
+    from ai_reply_copilot import storage
+
+    entries = storage.load_feedback()
+    assert entries[0]["rating"] == "useful"
+
+
+def test_cli_suggest_applies_saved_profile(chat_db, capsys, tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    cli.main(["profile", "set", "--language", "中文"])
+    capsys.readouterr()
+    fake = FakeClient(json.dumps({"understanding": "x", "candidates": ["好的"]}))
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake)
+    cli.main(["suggest", "10", "--db", str(chat_db)])
+    _, user = fake.calls[0]
+    assert "中文" in user
+
+
 def test_cli_reply_imessage_dry_run(chat_db, capsys, monkeypatch):
     fake_llm = FakeClient(
         json.dumps(
