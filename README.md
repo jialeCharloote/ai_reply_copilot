@@ -23,6 +23,10 @@ a reviewed sending path, and an end-to-end `reply` command.
 - An end-to-end `reply` command that reads a conversation, generates candidates,
   lets you pick or edit one, and sends after confirmation — the PRD core loop.
 - Local-first personal style profile (applied to suggestions) and a feedback log.
+- Bilingual by default: replies match the conversation's language (natural
+  Chinese/English mixing, no translationese); your profile language wins.
+- A sensitive-content reminder (financial/medical/legal/confidential/credentials,
+  EN + ZH) before context is sent to a cloud model; `reply` asks to continue.
 
 Reading is strictly read-only. Sending always requires confirmation (or an
 explicit `--yes`) and only sends plain text — no private-API tricks.
@@ -76,6 +80,10 @@ charla send --source slack --to C0123456789 --text "On it" --dry-run
 # End-to-end: read a conversation, get candidates, pick/edit, then send
 charla reply 42 --tone friendly
 charla reply C0123456789 --source slack --intent follow_up --dry-run
+
+# No target? Charla uses your most recent conversation
+charla reply --tone professional
+charla suggest
 ```
 
 In `reply`, pick a candidate by number, type `e<n>` to edit one before

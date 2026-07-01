@@ -107,6 +107,43 @@ def test_cli_reply_no_target_uses_most_recent(chat_db, capsys, monkeypatch):
     assert "not sent" in out
 
 
+def test_cli_suggest_warns_on_sensitive_context(chat_db, capsys, monkeypatch):
+    fake = FakeClient(json.dumps({"understanding": "x", "candidates": ["ok"]}))
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake)
+    monkeypatch.setattr(cli, "scan_sensitive", lambda text: ["financial"])
+    code = cli.main(["suggest", "10", "--db", str(chat_db)])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "financial" in out
+    assert "cloud model" in out
+
+
+def test_cli_reply_sensitive_cancel(chat_db, capsys, monkeypatch):
+    fake = FakeClient(json.dumps({"understanding": "x", "candidates": ["ok"]}))
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake)
+    monkeypatch.setattr(cli, "scan_sensitive", lambda text: ["credentials"])
+    monkeypatch.setattr("builtins.input", lambda _: "n")
+    code = cli.main(["reply", "10", "--db", str(chat_db)])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "credentials" in out
+    assert "Cancelled." in out
+    # The LLM must not have been called after cancelling.
+    assert fake.calls == []
+
+
+def test_cli_reply_sensitive_dry_run_skips_confirm(chat_db, capsys, monkeypatch):
+    fake = FakeClient(json.dumps({"understanding": "x", "candidates": ["A", "B", "C"]}))
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake)
+    monkeypatch.setattr(cli, "scan_sensitive", lambda text: ["medical"])
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    code = cli.main(["reply", "10", "--db", str(chat_db), "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "medical" in out
+    assert "not sent" in out
+
+
 def test_cli_slack_list(capsys, monkeypatch):
     fake = _fake_slack()
     monkeypatch.setattr(cli, "SlackClient", lambda: fake)

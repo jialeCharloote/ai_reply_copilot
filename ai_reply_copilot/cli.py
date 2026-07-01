@@ -30,6 +30,7 @@ from .imessage import (
 )
 from .llm import LLMError, get_client
 from .prompts import INTENTS, TONES, StyleProfile
+from .safety import describe_warning, scan_sensitive
 from .send import SendError, send_imessage, send_slack
 from .slack import SlackClient, SlackError
 from .storage import (
@@ -299,6 +300,10 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
         print(f"No messages found for {args.source} target {target}.")
         return 0
 
+    categories = scan_sensitive(render_context(messages))
+    if categories:
+        print(describe_warning(categories))
+
     client = get_client(provider=args.provider, model=args.model)
     style = None if args.ignore_profile else load_style_profile()
     suggestion = generate_replies(
@@ -372,6 +377,14 @@ def _cmd_reply(args: argparse.Namespace) -> int:
     if not messages:
         print(f"No messages found for {args.source} target {target}.")
         return 0
+
+    categories = scan_sensitive(render_context(messages))
+    if categories:
+        print(describe_warning(categories))
+        if not args.dry_run and not args.yes:
+            if not _confirm("Continue anyway? [y/N] "):
+                print("Cancelled.")
+                return 1
 
     llm_client = get_client(provider=args.provider, model=args.model)
     style = None if args.ignore_profile else load_style_profile()
