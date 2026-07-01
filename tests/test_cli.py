@@ -141,3 +141,19 @@ def test_cli_send_cancelled(capsys, monkeypatch):
     out = capsys.readouterr().out
     assert code == 1
     assert "Cancelled." in out
+
+
+def test_cli_reply_imessage_dry_run(chat_db, capsys, monkeypatch):
+    fake_llm = FakeClient(
+        json.dumps(
+            {"understanding": "Alex asks about tonight.", "candidates": ["Yes!", "No", "Maybe"]}
+        )
+    )
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake_llm)
+    # Pick candidate 1; dry-run needs no confirmation.
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+    code = cli.main(["reply", "10", "--db", str(chat_db), "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "1. Yes!" in out
+    assert "not sent" in out

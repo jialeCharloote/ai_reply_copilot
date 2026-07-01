@@ -18,10 +18,12 @@ from typing import List, Optional
 
 from . import __version__
 from . import slack as slack_reader
+from .flow import run_reply_flow
 from .generate import GenerationError, generate_replies
 from .imessage import (
     DEFAULT_CHAT_DB,
     ChatDatabaseError,
+    get_chat_identifier,
     get_conversation_context,
     list_conversations,
     render_context,
@@ -125,6 +127,30 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Skip the confirmation prompt (use with care)",
     )
+
+    p_reply = sub.add_parser(
+        "reply",
+        help="End-to-end: read a conversation, suggest, pick/edit, then send",
+    )
+    p_reply.add_argument(
+        "target",
+        help="iMessage chat ROWID or Slack channel ID (with --source slack)",
+    )
+    p_reply.add_argument(
+        "--source", choices=["imessage", "slack"], default="imessage"
+    )
+    p_reply.add_argument("--limit", type=int, default=20, help="Max context messages")
+    p_reply.add_argument("--intent", choices=sorted(INTENTS))
+    p_reply.add_argument("--tone", choices=sorted(TONES))
+    p_reply.add_argument("--draft", help="What you roughly want to say")
+    p_reply.add_argument("--num", type=int, default=3, help="Number of candidates")
+    p_reply.add_argument(
+        "--provider", choices=["openai", "anthropic"], default="openai"
+    )
+    p_reply.add_argument("--model", help="Override the default model")
+    p_reply.add_argument("--dry-run", action="store_true", help="Preview without sending")
+    p_reply.add_argument("--yes", action="store_true", help="Skip send confirmation")
+    _add_db_arg(p_reply)
 
     return parser
 
@@ -248,6 +274,48 @@ def _cmd_send(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_reply(args: argparse.Namespace) -> int:
+    if args.source == "slack":
+        slack_client = SlackClient()
+        messages = slack_reader.get_conversation_context(
+            slack_client, channel_id=args.target, limit=args.limit
+        )
+
+        def send_fn(text: str, dry_run: bool):
+            return send_slack(slack_client, args.target, text, dry_run=dry_run)
+
+    else:
+        chat_id = int(args.target)
+        messages = get_conversation_context(
+            chat_id=chat_id, db_path=args.db, limit=args.limit
+        )
+        recipient = get_chat_identifier(chat_id, db_path=args.db)
+        if not recipient:
+            print(f"error: could not resolve a recipient for chat {chat_id}.", file=sys.stderr)
+            return 2
+
+        def send_fn(text: str, dry_run: bool):
+            return send_imessage(recipient, text, dry_run=dry_run)
+
+    if not messages:
+        print(f"No messages found for {args.source} target {args.target}.")
+        return 0
+
+    llm_client = get_client(provider=args.provider, model=args.model)
+    result = run_reply_flow(
+        messages,
+        llm_client,
+        send_fn,
+        intent=args.intent,
+        tone=args.tone,
+        draft=args.draft,
+        num=args.num,
+        dry_run=args.dry_run,
+        auto_yes=args.yes,
+    )
+    return 0 if result is not None else 1
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -264,6 +332,8 @@ def main(argv: Optional[List[str]] = None) -> int:
             return _cmd_suggest(args)
         if args.command == "send":
             return _cmd_send(args)
+        if args.command == "reply":
+            return _cmd_reply(args)
     except (ChatDatabaseError, LLMError, GenerationError, SlackError, SendError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -28,6 +28,7 @@ __all__ = [
     "decode_attributed_body",
     "list_conversations",
     "get_conversation_context",
+    "get_chat_identifier",
     "render_context",
 ]
 
@@ -205,3 +206,17 @@ def get_conversation_context(
         )
     messages.reverse()
     return messages
+
+
+def get_chat_identifier(
+    chat_id: int, db_path: Path = DEFAULT_CHAT_DB
+) -> Optional[str]:
+    """Return the chat_identifier (phone/email for 1:1 chats) for a chat id."""
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT chat_identifier FROM chat WHERE ROWID = ?", (chat_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+    return row["chat_identifier"] if row else None
