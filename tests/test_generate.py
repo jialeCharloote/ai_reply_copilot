@@ -38,6 +38,14 @@ def test_build_system_prompt_mentions_count():
     assert "JSON" in prompt
 
 
+def test_build_system_prompt_language_rules():
+    prompt = build_system_prompt()
+    assert "same language as the conversation" in prompt
+    assert "translationese" in prompt
+    assert "overrides" in prompt  # style profile language wins
+    assert "idiomatic" in prompt
+
+
 def test_build_user_prompt_includes_intent_tone_draft():
     prompt = build_user_prompt(
         context="[..] boss: hi",

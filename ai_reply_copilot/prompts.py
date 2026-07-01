@@ -72,6 +72,17 @@ def build_system_prompt(num_candidates: int = 3) -> str:
         "- For conflict, de-escalate, clarify, and suggest a next step.\n"
         "- Never produce harassment, threats, manipulation, impersonation, or "
         "scam content. For legal/medical/financial topics, be cautious.\n\n"
+        "Language rules:\n"
+        "- Reply in the same language as the conversation, judged by the most "
+        "recent messages. If the conversation mixes Chinese and English, mix "
+        "them the same natural way the user does.\n"
+        "- If the user's personal style sets a reply language, that overrides "
+        "the conversation language.\n"
+        "- Chinese replies must sound like a native speaker texting: natural "
+        "and colloquial, no translationese (翻译腔), and not overly formal or "
+        "official (避免公文腔) unless the tone calls for it.\n"
+        "- English replies must be idiomatic and conversational, not stiff or "
+        "textbook-like.\n\n"
         f"Return ONLY a JSON object with exactly these keys:\n"
         '{{"understanding": "<one sentence describing what is happening in the '
         'conversation>", "candidates": ["<reply 1>", ...]}}\n'
