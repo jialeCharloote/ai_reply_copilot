@@ -82,7 +82,9 @@ class AnthropicClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "claude-3-5-sonnet-latest",
+        # Default to the current-generation Opus for the best bilingual/tone
+        # quality. Use ``claude-sonnet-5`` via --model for cheaper/faster drafts.
+        model: str = "claude-opus-4-8",
         max_tokens: int = 1024,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
@@ -115,5 +117,5 @@ def get_client(provider: str = "openai", model: Optional[str] = None):
     if provider == "openai":
         return OpenAIClient(model=model or "gpt-4o-mini")
     if provider == "anthropic":
-        return AnthropicClient(model=model or "claude-3-5-sonnet-latest")
+        return AnthropicClient(model=model or "claude-opus-4-8")
     raise LLMError(f"Unknown provider: {provider!r} (use 'openai' or 'anthropic').")

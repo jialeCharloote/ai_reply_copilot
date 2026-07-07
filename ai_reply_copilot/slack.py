@@ -104,8 +104,13 @@ class SlackClient:
             raise SlackError(f"Slack API error on {method}: {result.get('error')}")
         return result
 
-    def post_message(self, channel: str, text: str) -> dict:
-        return self.post("chat.postMessage", {"channel": channel, "text": text})
+    def post_message(
+        self, channel: str, text: str, *, thread_ts: Optional[str] = None
+    ) -> dict:
+        payload = {"channel": channel, "text": text}
+        if thread_ts:
+            payload["thread_ts"] = thread_ts
+        return self.post("chat.postMessage", payload)
 
     def auth_user_id(self) -> Optional[str]:
         if self._auth_user_id is None:
@@ -204,6 +209,22 @@ def list_conversations(
     return conversations[:limit]
 
 
+def _message_from_raw(
+    client: SlackClient, raw: dict, auth_id: Optional[str]
+) -> Optional[Message]:
+    """Turn one raw Slack message dict into a shared ``Message`` (or None)."""
+    text = (raw.get("text") or "").strip()
+    if not text:
+        return None
+    user_id = raw.get("user")
+    return Message(
+        text=text,
+        is_from_me=bool(auth_id and user_id == auth_id),
+        timestamp=slack_ts_to_datetime(raw.get("ts")),
+        sender=client.user_name(user_id),
+    )
+
+
 def get_conversation_context(
     client: SlackClient, channel_id: str, limit: int = 20
 ) -> List[Message]:
@@ -212,19 +233,27 @@ def get_conversation_context(
         "conversations.history", {"channel": channel_id, "limit": limit}
     )
     auth_id = client.auth_user_id()
-    messages: List[Message] = []
-    for raw in data.get("messages", []):
-        text = (raw.get("text") or "").strip()
-        if not text:
-            continue
-        user_id = raw.get("user")
-        messages.append(
-            Message(
-                text=text,
-                is_from_me=bool(auth_id and user_id == auth_id),
-                timestamp=slack_ts_to_datetime(raw.get("ts")),
-                sender=client.user_name(user_id),
-            )
-        )
-    messages.reverse()
+    messages = [
+        m
+        for m in (_message_from_raw(client, r, auth_id) for r in data.get("messages", []))
+        if m is not None
+    ]
+    messages.reverse()  # history returns newest-first
     return messages
+
+
+def get_thread_context(
+    client: SlackClient, channel_id: str, thread_ts: str, limit: int = 50
+) -> List[Message]:
+    """Return a thread's messages (parent first) in chronological order."""
+    data = client.call(
+        "conversations.replies",
+        {"channel": channel_id, "ts": thread_ts, "limit": limit},
+    )
+    auth_id = client.auth_user_id()
+    # conversations.replies already returns parent-first chronological order.
+    return [
+        m
+        for m in (_message_from_raw(client, r, auth_id) for r in data.get("messages", []))
+        if m is not None
+    ]

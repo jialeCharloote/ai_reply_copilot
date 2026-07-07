@@ -109,6 +109,32 @@ You can also run it without installing:
 python -m ai_reply_copilot.cli list
 ```
 
+## Slack app (draft & send as you)
+
+The Slack front-end adds a **message-action shortcut** ("Draft reply (Charla)"):
+pick a message → get 3 in-voice drafts in a modal → send the one you pick/edit
+**as yourself** (not as a bot). It runs over Socket Mode, so no public URL is
+needed — good for local dogfooding.
+
+```bash
+pip install -e ".[dev,slack]"
+cp .env.example .env   # fill in the tokens, then export them (or use direnv)
+python -m ai_reply_copilot.slack_app
+```
+
+Create a Slack app with **Socket Mode + Interactivity** enabled and a message
+shortcut whose Callback ID is `charla_draft_reply`. Tokens needed (see
+`.env.example`): app-level `SLACK_APP_TOKEN` (xapp, scope `connections:write`),
+`SLACK_BOT_TOKEN` (xoxb, to open the modal), and **your** `SLACK_USER_TOKEN`
+(xoxp, user scopes `channels:history`, `groups:history`, `im:history`,
+`mpim:history`, `users:read`, `chat:write`) — the user token is what reads what
+you can see and posts replies as you. If the thread trips the sensitive-content
+scanner, Charla asks before sending context to the cloud model.
+
+The generation core stays dependency-free; only the Slack app needs `slack_bolt`.
+The shared engine lives in `drafting.py`, so later surfaces (menu-bar app,
+browser extension) are thin front-ends over the same code.
+
 ## Development
 
 ```bash
@@ -125,6 +151,7 @@ anywhere without Full Disk Access or a real Messages history.
 3. ~~Sending path (Messages automation / Slack API) with review-before-send.~~ done
 4. ~~End-to-end interactive flow: read → suggest → pick → send in one command.~~ done
 5. ~~Personal style profile persistence and feedback loop.~~ done
-6. Menu-bar / desktop shell (Swift or Tauri) around this core.
+6. ~~Slack app: draft & send as you (message-action shortcut, Socket Mode).~~ done
+7. Menu-bar / desktop shell (Swift or Tauri) around the shared `drafting.py` engine.
 
 See the 6-week roadmap in the PRD (section 21).

@@ -14,9 +14,13 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=7.0"]
+# The generation core stays dependency-free; the Slack front-end needs Bolt
+# (Socket Mode + Block Kit modals), which pulls slack_sdk.
+slack = ["slack_bolt>=1.18"]
 
 [project.scripts]
 charla = "ai_reply_copilot.cli:main"
+charla-slack = "ai_reply_copilot.slack_app:main"
 
 [tool.setuptools]
 packages = ["ai_reply_copilot"]

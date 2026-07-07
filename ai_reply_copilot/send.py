@@ -76,10 +76,17 @@ def send_imessage(
     return SendResult("imessage", recipient, text, False, "sent via Messages")
 
 
-def send_slack(client, channel: str, text: str, *, dry_run: bool = False) -> SendResult:
+def send_slack(
+    client,
+    channel: str,
+    text: str,
+    *,
+    thread_ts: Optional[str] = None,
+    dry_run: bool = False,
+) -> SendResult:
     if not text.strip():
         raise SendError("Refusing to send an empty message.")
     if dry_run:
         return SendResult("slack", channel, text, True, "dry-run (not sent)")
-    resp = client.post_message(channel, text)
+    resp = client.post_message(channel, text, thread_ts=thread_ts)
     return SendResult("slack", channel, text, False, f"sent (ts={resp.get('ts')})")

@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from ai_reply_copilot.send import send_slack
 from ai_reply_copilot.slack import (
     FakeSlackClient,
     SlackClient,
     SlackError,
     get_conversation_context,
+    get_thread_context,
     list_conversations,
     slack_ts_to_datetime,
 )
@@ -106,3 +108,35 @@ def test_api_error_raises(fake_slack):
     fake_slack._responses["conversations.history"] = {"ok": False, "error": "channel_not_found"}
     with pytest.raises(SlackError):
         get_conversation_context(fake_slack, "C1")
+
+
+def test_get_thread_context_parent_first(fake_slack):
+    # conversations.replies returns parent-first chronological order.
+    fake_slack._responses["conversations.replies"] = lambda p: {
+        "ok": True,
+        "messages": [
+            {"ts": "1.0", "text": "Can you review the deck?", "user": "U2"},
+            {"ts": "2.0", "text": "on it", "user": "U_ME"},
+        ],
+    }
+    messages = get_thread_context(fake_slack, "C1", "1.0")
+    assert [m.text for m in messages] == ["Can you review the deck?", "on it"]
+    assert messages[0].is_from_me is False
+    assert messages[0].sender == "Alex"
+    assert messages[1].is_from_me is True
+
+
+def test_send_slack_threads_reply(fake_slack):
+    fake_slack._responses["chat.postMessage"] = {"ok": True, "ts": "9.9"}
+    result = send_slack(fake_slack, "C1", "sounds good", thread_ts="1.0")
+    assert result.detail == "sent (ts=9.9)"
+    method, payload = fake_slack.posted[-1]
+    assert method == "chat.postMessage"
+    assert payload["thread_ts"] == "1.0"
+
+
+def test_send_slack_without_thread_omits_thread_ts(fake_slack):
+    fake_slack._responses["chat.postMessage"] = {"ok": True, "ts": "9.9"}
+    send_slack(fake_slack, "C1", "hi")
+    _, payload = fake_slack.posted[-1]
+    assert "thread_ts" not in payload
