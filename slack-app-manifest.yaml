@@ -1,0 +1,47 @@
+# Charla — Slack app manifest (dogfood, single workspace, Socket Mode).
+#
+# Create the app from this file so you don't have to click through the config:
+#   https://api.slack.com/apps  →  "Create New App"  →  "From an app manifest"
+#   → pick your workspace → paste this YAML → Create.
+#
+# Then:
+#   1. Basic Information → App-Level Tokens → "Generate Token and Scopes":
+#        name it anything, add scope `connections:write` → that xapp- token is
+#        your SLACK_APP_TOKEN.
+#   2. Install App → Install to Workspace → authorize. Copy:
+#        - Bot User OAuth Token   (xoxb-)  → SLACK_BOT_TOKEN
+#        - User OAuth Token       (xoxp-)  → SLACK_USER_TOKEN
+#   3. Put all three in .env (see .env.example), then `python -m ai_reply_copilot.slack_app`.
+#
+# In any message's "..." menu you'll now see "Draft reply (Charla)".
+display_information:
+  name: Charla
+  description: Draft in-voice replies and send them as you.
+  background_color: "#2c2d30"
+features:
+  bot_user:
+    display_name: Charla
+    always_online: false
+  shortcuts:
+    - name: Draft reply (Charla)
+      type: message
+      callback_id: charla_draft_reply
+      description: Draft 3 in-voice replies to this message and send the one you pick.
+oauth_config:
+  scopes:
+    # The user token reads what YOU can see and posts replies AS YOU.
+    user:
+      - channels:history
+      - groups:history
+      - im:history
+      - mpim:history
+      - users:read
+      - chat:write
+    # The bot token is only used to open the drafting modal (views.open via trigger_id).
+    bot:
+      - commands
+settings:
+  interactivity:
+    is_enabled: true
+  socket_mode_enabled: true
+  token_rotation_enabled: false

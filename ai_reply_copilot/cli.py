@@ -12,6 +12,7 @@ Examples::
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import List, Optional
@@ -23,7 +24,7 @@ from .generate import GenerationError, generate_replies
 from .imessage import (
     DEFAULT_CHAT_DB,
     ChatDatabaseError,
-    get_chat_identifier,
+    get_chat_send_target,
     get_conversation_context,
     list_conversations,
     render_context,
@@ -31,7 +32,7 @@ from .imessage import (
 from .llm import LLMError, get_client
 from .prompts import INTENTS, TONES, StyleProfile
 from .safety import describe_warning, scan_sensitive
-from .send import SendError, send_imessage, send_slack
+from .send import SendError, send_imessage, send_imessage_to_chat, send_slack
 from .slack import SlackClient, SlackError
 from .storage import (
     FEEDBACK_RATINGS,
@@ -117,6 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--ignore-profile",
         action="store_true",
         help="Do not apply the saved personal style profile",
+    )
+    p_suggest.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON (for front-ends like the menu-bar app)",
     )
     _add_db_arg(p_suggest)
 
@@ -301,7 +307,7 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
         return 0
 
     categories = scan_sensitive(render_context(messages))
-    if categories:
+    if categories and not args.json:
         print(describe_warning(categories))
 
     client = get_client(provider=args.provider, model=args.model)
@@ -315,6 +321,21 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
         draft=args.draft,
         num_candidates=args.num,
     )
+
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "source": args.source,
+                    "target": str(target),
+                    "understanding": suggestion.understanding,
+                    "candidates": suggestion.candidates,
+                    "sensitive": categories,
+                },
+                ensure_ascii=False,
+            )
+        )
+        return 0
 
     if suggestion.understanding:
         print(f"Understanding: {suggestion.understanding}\n")
@@ -366,13 +387,18 @@ def _cmd_reply(args: argparse.Namespace) -> int:
         messages = get_conversation_context(
             chat_id=chat_id, db_path=args.db, limit=args.limit
         )
-        recipient = get_chat_identifier(chat_id, db_path=args.db)
-        if not recipient:
+        chat = get_chat_send_target(chat_id, db_path=args.db)
+        if chat is None or not (chat.guid or chat.identifier):
             print(f"error: could not resolve a recipient for chat {chat_id}.", file=sys.stderr)
             return 2
 
-        def send_fn(text: str, dry_run: bool):
-            return send_imessage(recipient, text, dry_run=dry_run)
+        if chat.is_group:
+            # Groups must be addressed by GUID; the chat_identifier is a stub.
+            def send_fn(text: str, dry_run: bool):
+                return send_imessage_to_chat(chat.guid, text, dry_run=dry_run)
+        else:
+            def send_fn(text: str, dry_run: bool):
+                return send_imessage(chat.recipient, text, dry_run=dry_run)
 
     if not messages:
         print(f"No messages found for {args.source} target {target}.")

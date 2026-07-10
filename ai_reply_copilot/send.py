@@ -60,6 +60,19 @@ def _default_osascript_runner(script: str) -> str:
     return proc.stdout.strip()
 
 
+def build_imessage_chat_applescript(chat_guid: str, text: str) -> str:
+    """Send to an existing chat by GUID — required for group chats, where the
+    ``chat_identifier`` is a group stub with no addressable participant."""
+    chat_guid = _escape_applescript(chat_guid)
+    text = _escape_applescript(text)
+    return (
+        'tell application "Messages"\n'
+        f'    set targetChat to chat id "{chat_guid}"\n'
+        f'    send "{text}" to targetChat\n'
+        "end tell"
+    )
+
+
 def send_imessage(
     recipient: str,
     text: str,
@@ -74,6 +87,25 @@ def send_imessage(
         return SendResult("imessage", recipient, text, True, "dry-run (not sent)")
     (runner or _default_osascript_runner)(script)
     return SendResult("imessage", recipient, text, False, "sent via Messages")
+
+
+def send_imessage_to_chat(
+    chat_guid: str,
+    text: str,
+    *,
+    dry_run: bool = False,
+    runner: Optional[Callable[[str], str]] = None,
+) -> SendResult:
+    """Send to an existing chat (1:1 or group) by its GUID."""
+    if not text.strip():
+        raise SendError("Refusing to send an empty message.")
+    if not chat_guid:
+        raise SendError("No chat GUID to send to.")
+    script = build_imessage_chat_applescript(chat_guid, text)
+    if dry_run:
+        return SendResult("imessage", chat_guid, text, True, "dry-run (not sent)")
+    (runner or _default_osascript_runner)(script)
+    return SendResult("imessage", chat_guid, text, False, "sent via Messages")
 
 
 def send_slack(

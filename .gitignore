@@ -6,3 +6,5 @@ __pycache__/
 .venv/
 build/
 dist/
+# SwiftPM build output (macos/ menu-bar shell)
+.build/

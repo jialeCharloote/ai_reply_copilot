@@ -7,7 +7,9 @@ import pytest
 from ai_reply_copilot.send import (
     SendError,
     build_imessage_applescript,
+    build_imessage_chat_applescript,
     send_imessage,
+    send_imessage_to_chat,
     send_slack,
 )
 from ai_reply_copilot.slack import FakeSlackClient
@@ -42,6 +44,28 @@ def test_send_imessage_invokes_runner():
 def test_send_imessage_empty_raises():
     with pytest.raises(SendError):
         send_imessage("+1555", "   ")
+
+
+def test_build_chat_applescript_targets_chat_by_guid():
+    script = build_imessage_chat_applescript("iMessage;+;chat9999", "hi")
+    assert 'chat id "iMessage;+;chat9999"' in script
+    assert 'send "hi" to targetChat' in script
+
+
+def test_send_imessage_to_chat_invokes_runner():
+    calls = []
+    result = send_imessage_to_chat(
+        "iMessage;+;chat9999", "hey team", runner=lambda s: calls.append(s) or ""
+    )
+    assert result.dry_run is False
+    assert len(calls) == 1
+    assert "chat9999" in calls[0]
+    assert result.detail == "sent via Messages"
+
+
+def test_send_imessage_to_chat_empty_guid_raises():
+    with pytest.raises(SendError):
+        send_imessage_to_chat("", "hi")
 
 
 def test_send_slack_dry_run():

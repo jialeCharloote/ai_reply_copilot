@@ -243,6 +243,54 @@ def test_cli_suggest_applies_saved_profile(chat_db, capsys, tmp_path, monkeypatc
     assert "中文" in user
 
 
+def test_cli_suggest_json(chat_db, capsys, monkeypatch):
+    fake = FakeClient(
+        json.dumps(
+            {"understanding": "Alex asks about tonight.", "candidates": ["Yes!", "No", "7 works"]}
+        )
+    )
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake)
+    code = cli.main(["suggest", "10", "--db", str(chat_db), "--json"])
+    out = capsys.readouterr().out
+    assert code == 0
+    payload = json.loads(out)  # exactly one JSON line, no human-readable noise
+    assert payload["candidates"] == ["Yes!", "No", "7 works"]
+    assert payload["understanding"].startswith("Alex")
+    assert payload["source"] == "imessage"
+    assert payload["target"] == "10"
+    assert payload["sensitive"] == []
+
+
+def test_cli_reply_group_sends_by_chat_guid(group_chat_db, capsys, monkeypatch):
+    from ai_reply_copilot.send import SendResult
+
+    fake_llm = FakeClient(
+        json.dumps({"understanding": "launch", "candidates": ["On it", "Give me 10", "Posting now"]})
+    )
+    monkeypatch.setattr(cli, "get_client", lambda provider, model: fake_llm)
+    monkeypatch.setattr("builtins.input", lambda _: "1")
+
+    captured = {}
+
+    def fake_chat_send(guid, text, dry_run=False):
+        captured["guid"] = guid
+        captured["text"] = text
+        return SendResult("imessage", guid, text, dry_run, "dry-run (not sent)")
+
+    def fail_participant(*args, **kwargs):  # groups must not use the 1:1 path
+        raise AssertionError("group reply must not use participant send")
+
+    monkeypatch.setattr(cli, "send_imessage_to_chat", fake_chat_send)
+    monkeypatch.setattr(cli, "send_imessage", fail_participant)
+
+    code = cli.main(["reply", "30", "--db", str(group_chat_db), "--dry-run"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert captured["guid"] == "iMessage;+;chat9999"
+    assert captured["text"] == "On it"
+    assert "not sent" in out
+
+
 def test_cli_reply_imessage_dry_run(chat_db, capsys, monkeypatch):
     fake_llm = FakeClient(
         json.dumps(

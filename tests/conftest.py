@@ -15,9 +15,11 @@ CREATE TABLE handle (
 );
 CREATE TABLE chat (
     ROWID INTEGER PRIMARY KEY,
+    guid TEXT,
     chat_identifier TEXT,
     display_name TEXT,
-    service_name TEXT
+    service_name TEXT,
+    style INTEGER
 );
 CREATE TABLE message (
     ROWID INTEGER PRIMARY KEY,
@@ -59,11 +61,15 @@ def chat_db(tmp_path) -> Path:
         [(1, "+15551234567", "iMessage"), (2, "boss@work.com", "iMessage")],
     )
     conn.executemany(
-        "INSERT INTO chat (ROWID, chat_identifier, display_name, service_name) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO chat (ROWID, guid, chat_identifier, display_name, "
+        "service_name, style) VALUES (?, ?, ?, ?, ?, ?)",
         [
-            (10, "+15551234567", "Alex", "iMessage"),
-            (20, "boss@work.com", "", "iMessage"),
+            # style 45 = 1:1, style 43 = group. Chat 30 is a group with no
+            # messages, so it stays invisible to the join-based readers/tests
+            # while still exercising get_chat_send_target.
+            (10, "iMessage;-;+15551234567", "+15551234567", "Alex", "iMessage", 45),
+            (20, "iMessage;-;boss@work.com", "boss@work.com", "", "iMessage", 45),
+            (30, "iMessage;+;chat9999", "chat9999", "Launch Team", "iMessage", 43),
         ],
     )
 
@@ -86,6 +92,39 @@ def chat_db(tmp_path) -> Path:
     conn.executemany(
         "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
         [(10, 1), (10, 2), (10, 3), (20, 4), (20, 5)],
+    )
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+@pytest.fixture
+def group_chat_db(tmp_path) -> Path:
+    """A temporary chat.db whose only conversation is a group chat."""
+    db_path = tmp_path / "group.db"
+    conn = sqlite3.connect(db_path)
+    conn.executescript(_SCHEMA)
+    conn.executemany(
+        "INSERT INTO handle (ROWID, id, service) VALUES (?, ?, ?)",
+        [(1, "+15551234567", "iMessage"), (2, "+15559998888", "iMessage")],
+    )
+    conn.execute(
+        "INSERT INTO chat (ROWID, guid, chat_identifier, display_name, "
+        "service_name, style) VALUES (?, ?, ?, ?, ?, ?)",
+        (30, "iMessage;+;chat9999", "chat9999", "Launch Team", "iMessage", 43),
+    )
+    base = 700_000_000 * 1_000_000_000
+    conn.executemany(
+        "INSERT INTO message (ROWID, text, attributedBody, handle_id, date, is_from_me) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [
+            (1, "Ship the launch post tonight?", None, 1, base + 1, 0),
+            (2, "give me 10 min", None, None, base + 2, 1),
+        ],
+    )
+    conn.executemany(
+        "INSERT INTO chat_message_join (chat_id, message_id) VALUES (?, ?)",
+        [(30, 1), (30, 2)],
     )
     conn.commit()
     conn.close()

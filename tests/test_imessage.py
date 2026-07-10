@@ -10,6 +10,7 @@ from ai_reply_copilot.imessage import (
     ChatDatabaseError,
     apple_time_to_datetime,
     decode_attributed_body,
+    get_chat_send_target,
     get_conversation_context,
     list_conversations,
     render_context,
@@ -99,6 +100,25 @@ def test_render_context_format(chat_db):
     rendered = render_context(messages)
     assert "Me: Maybe! What did you have in mind?" in rendered
     assert "Dinner at 7?" in rendered
+
+
+def test_get_chat_send_target_one_to_one(chat_db):
+    target = get_chat_send_target(10, db_path=chat_db)
+    assert target is not None
+    assert target.is_group is False
+    assert target.identifier == "+15551234567"
+    assert target.recipient == "+15551234567"
+
+
+def test_get_chat_send_target_group(chat_db):
+    target = get_chat_send_target(30, db_path=chat_db)
+    assert target is not None
+    assert target.is_group is True
+    assert target.guid == "iMessage;+;chat9999"
+
+
+def test_get_chat_send_target_missing(chat_db):
+    assert get_chat_send_target(999, db_path=chat_db) is None
 
 
 def test_missing_db_raises(tmp_path):

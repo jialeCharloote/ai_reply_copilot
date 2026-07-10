@@ -29,6 +29,8 @@ __all__ = [
     "list_conversations",
     "get_conversation_context",
     "get_chat_identifier",
+    "get_chat_send_target",
+    "ChatTarget",
     "render_context",
 ]
 
@@ -220,3 +222,42 @@ def get_chat_identifier(
     finally:
         conn.close()
     return row["chat_identifier"] if row else None
+
+
+@dataclass
+class ChatTarget:
+    """How to send to a chat: its GUID, human identifier, and whether it's a group."""
+
+    guid: str
+    identifier: str
+    is_group: bool
+
+    @property
+    def recipient(self) -> str:
+        """A 1:1 send handle (phone/email), falling back to the GUID."""
+        return self.identifier or self.guid
+
+
+def get_chat_send_target(
+    chat_id: int, db_path: Path = DEFAULT_CHAT_DB
+) -> Optional[ChatTarget]:
+    """Resolve how to send to a chat.
+
+    1:1 chats send to a participant handle (phone/email); group chats must send
+    to the existing chat by GUID — ``chat_identifier`` alone is a group GUID
+    stub that AppleScript can't address as a participant. ``style`` 43 marks a
+    group; the ``;+;`` GUID form is a fallback signal.
+    """
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT guid, chat_identifier, style FROM chat WHERE ROWID = ?",
+            (chat_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if not row:
+        return None
+    guid = row["guid"] or ""
+    is_group = row["style"] == 43 or ";+;" in guid
+    return ChatTarget(guid=guid, identifier=row["chat_identifier"] or "", is_group=is_group)
