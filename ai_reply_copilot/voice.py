@@ -28,6 +28,11 @@ from .language import CHINESE, ENGLISH, detect_language
 from .models import Message
 from .safety import scan_blocking
 
+# Bump whenever the exemplar screen gets stricter: a profile saved under older,
+# weaker rules must not keep uploading its exemplars. storage.load_voice ignores
+# a profile whose version does not match, forcing a re-learn.
+VOICE_SCHEMA_VERSION = 1
+
 # Messages outside this band say little about voice: a bare "ok" carries no
 # style, and a pasted paragraph is not how the user texts.
 _MIN_EXEMPLAR_CHARS = 12
@@ -78,6 +83,8 @@ class VoiceProfile:
             bits.append("often starts messages in lowercase")
         if self.exclamation_rate > 0.25:
             bits.append("uses exclamation marks freely")
+        if self.question_rate > 0.35:
+            bits.append("often asks a question back")
         if 0.15 < self.chinese_rate < 0.85:
             bits.append(
                 f"writes in both Chinese and English ({round(self.chinese_rate * 100)}% Chinese)"
@@ -95,9 +102,16 @@ def _median(values: List[int]) -> int:
     return (ordered[middle - 1] + ordered[middle]) // 2
 
 
-def analyze_voice(texts: List[str]) -> VoiceProfile:
-    """Compute local statistics over the user's own messages. No network, no model."""
-    usable = [t.strip() for t in texts if t and t.strip()]
+def _as_text(sample) -> str:
+    return (getattr(sample, "text", sample) or "").strip()
+
+
+def analyze_voice(samples) -> VoiceProfile:
+    """Compute local statistics over the user's own messages. No network, no model.
+
+    Accepts plain strings or ``imessage.SentSample`` objects.
+    """
+    usable = [t for t in (_as_text(s) for s in samples) if t]
     if not usable:
         return VoiceProfile()
 
@@ -129,55 +143,91 @@ def analyze_voice(texts: List[str]) -> VoiceProfile:
 # that merely *smells* like a secret costs nothing. These reject the shapes a
 # vocabulary-based scanner will always miss: AWS keys, JWTs, PINs, order numbers,
 # anything with the entropy of a token rather than of a sentence.
-_LONG_DIGIT_RUN = re.compile(r"\d{6,}")
-_TOKENISH = re.compile(r"\b(?=\w*[A-Za-z])(?=\w*\d)[A-Za-z0-9_\-+/=]{12,}\b")
+_LONG_DIGIT_RUN = re.compile(r"\d{5,}")
+# Hyphens and dots must be inside the character classes: "Tulip-Garden-88" and
+# "Blue-Sky-Rain" are exactly the shape of a shared wifi/door code, and leaving
+# `-` out let every hyphenated password through.
+_TOKENISH = re.compile(r"(?=[\w.\-+/=]*[A-Za-z])(?=[\w.\-+/=]*\d)[\w.\-+/=]{10,}")
 _BASE64ISH = re.compile(r"\b[A-Za-z0-9+/]{20,}={0,2}\b")
-_SECRET_ADJACENT = re.compile(
-    r"\b(?:pin|otp|code|key|token|secret|login|credential|passphrase|wifi|wi-fi"
-    r"|account|routing|iban|swift|cvv)\b",
+# A "word" mixing letters, digits AND punctuation looks like a password and not
+# like a sentence — "Passw0rd!23" carries no keyword to key off.
+_PASSWORDISH = re.compile(r"\S*(?=\S*[A-Za-z])(?=\S*\d)(?=\S*[!@#$%^&*_+=?~-])\S{6,}")
+# "Blue-Sky-Rain", "Tulip-Garden-88" — the shape of a shared wifi/door code. Three
+# hyphen-joined capitalised words is not a shape English sentences take.
+_CODEPHRASE = re.compile(r"\b[A-Z][a-z]{2,}-[A-Z][a-z]{2,}-[A-Za-z0-9]{2,}\b")
+
+# Words that make a message *about* a secret. Deliberately NOT `code` / `key` /
+# `account` / `login`: those are four of the commonest words in professional
+# English ("review the code", "the key insight", "check my account"), and
+# rejecting them silently biased the exemplar pool away from exactly the register
+# this product exists to imitate. The narrow list below rarely appears in an
+# ordinary sentence, so rejecting on it costs almost nothing.
+_SECRET_WORDS = re.compile(
+    r"\b(?:password|passwd|pwd|passcode|passphrase|api[_ -]?key|secret[_ -]?key"
+    r"|access[_ -]?key|private[_ -]?key|ssh[_ -]?key|otp|2fa|mfa|seed phrase"
+    r"|routing|iban|swift code|cvv|ssn)\b",
     re.I,
 )
-_SECRET_ADJACENT_CJK = (
-    "密码", "口令", "验证码", "密钥", "秘钥", "私钥", "账号", "账户",
-    "卡号", "暗号", "登录", "登陆",
-)
-# A "word" mixing letters, digits AND punctuation is how a password looks and is
-# not how a sentence looks — "Passw0rd!23" has no keyword to key off.
-_PASSWORDISH = re.compile(r"\S*(?=\S*[A-Za-z])(?=\S*\d)(?=\S*[!@#$%^&*_+=?~])\S{6,}")
+_SECRET_WORDS_CJK = ("密码", "口令", "验证码", "密钥", "秘钥", "私钥", "助记词", "暗号", "卡号")
 
 
 def _smells_secret(text: str) -> bool:
-    """Paranoid, deliberately over-eager. A false positive here costs one message
-    out of thousands; a false negative uploads a secret with every future draft."""
+    """Deliberately over-eager: a false positive costs one message out of
+    thousands; a false negative uploads a secret with every future draft."""
     if scan_blocking(text):
         return True
     if _LONG_DIGIT_RUN.search(text) or _TOKENISH.search(text) or _BASE64ISH.search(text):
         return True
-    if _PASSWORDISH.search(text) or _SECRET_ADJACENT.search(text):
+    if _PASSWORDISH.search(text) or _CODEPHRASE.search(text) or _SECRET_WORDS.search(text):
         return True
-    return any(term in text for term in _SECRET_ADJACENT_CJK)
+    return any(term in text for term in _SECRET_WORDS_CJK)
 
 
-def pick_exemplars(texts: List[str], limit: int = 8) -> List[str]:
+def is_safe_exemplar(text: str, context: str = "") -> bool:
+    """Whether a message of the user's can be memorialised into every prompt.
+
+    ``context`` is the message it was answering, and it is not optional in
+    spirit: the reply to "what's the wifi password?" is a bare word like
+    ``sunshinecoast``, which carries no marker of its own. The only thing that
+    identifies it as a secret lives in the *other* person's message, so a scanner
+    that looks at the user's message alone is structurally blind to it — no amount
+    of extra regex closes that gap.
+
+    The honest residual: a diceware passphrase sent with no surrounding context
+    ("correct horse battery staple") is, in isolation, indistinguishable from an
+    ordinary sentence. Context is the only thing that catches it, which is why it
+    is threaded through here rather than papered over with more patterns.
+    """
+    candidate = (text or "").strip()
+    if not (_MIN_EXEMPLAR_CHARS <= len(candidate) <= _MAX_EXEMPLAR_CHARS):
+        return False
+    if _URL_RE.search(candidate):
+        return False  # links say nothing about voice and can carry tokens
+    if _smells_secret(candidate):
+        return False
+    # If they were *asked* for a secret, whatever they answered is one.
+    return not (context and _smells_secret(context))
+
+
+def pick_exemplars(samples, limit: int = 8) -> List[str]:
     """Choose verbatim messages that show the user's voice.
 
+    Accepts plain strings or ``imessage.SentSample`` objects; the latter carry the
+    message being replied to, which is what makes screening actually sound.
+
     Topic-level notices are fine — a message mentioning a salary is not a secret,
-    and excluding it would strip out exactly the professional register we want to
-    imitate. Anything that looks like it *carries* a secret is discarded; see
-    ``_smells_secret`` for why that bar is set so low.
+    and excluding it would strip out exactly the professional register we want.
     """
     if limit <= 0:
         return []  # "statistics only" must upload nothing, not one message
     seen = set()
     chosen: List[str] = []
-    for text in texts:
-        candidate = (text or "").strip()
-        if not (_MIN_EXEMPLAR_CHARS <= len(candidate) <= _MAX_EXEMPLAR_CHARS):
+    for sample in samples:
+        text = getattr(sample, "text", sample) or ""
+        context = getattr(sample, "prompt_text", "") or ""
+        candidate = text.strip()
+        if not is_safe_exemplar(candidate, context):
             continue
-        if _URL_RE.search(candidate):
-            continue  # links say nothing about voice and can carry tokens
-        if _smells_secret(candidate):
-            continue  # never memorialise a secret into every future prompt
         key = candidate.lower()
         if key in seen:
             continue
@@ -188,11 +238,11 @@ def pick_exemplars(texts: List[str], limit: int = 8) -> List[str]:
     return chosen
 
 
-def learn_voice(texts: List[str], *, exemplar_limit: int = 8) -> VoiceProfile:
+def learn_voice(samples, *, exemplar_limit: int = 8) -> VoiceProfile:
     """Statistics plus screened exemplars, from the user's own sent messages."""
-    profile = analyze_voice(texts)
+    profile = analyze_voice(samples)
     if profile.sampled:
-        profile.exemplars = pick_exemplars(texts, limit=exemplar_limit)
+        profile.exemplars = pick_exemplars(samples, limit=exemplar_limit)
     return profile
 
 

@@ -167,7 +167,39 @@ def test_a_chinese_separator_still_counts():
     assert "credentials" in scan_blocking("wifi 是 CoffeeShop2024")
 
 
-def test_a_bare_keyword_without_a_value_does_not_block():
-    # "pin the message", "the wifi is slow" must stay quiet.
-    assert scan_blocking("can you pin the message in the channel?") == []
-    assert scan_blocking("the wifi keeps dropping in this room") == []
+def test_a_credential_word_without_a_secret_value_does_not_block():
+    # The bug this replaces: requiring merely "\S+" after the keyword meant
+    # "slow" counted as a value, so ordinary sentences hard-blocked. A value has
+    # to *look* like a secret. Every line below is a normal work message.
+    for text in (
+        "the wifi is slow",
+        "the wifi keeps dropping in this room",
+        "the token is expired, I'll refresh it",
+        "the secret is out",
+        "pin is 5 minutes away",
+        "can you pin the message in the channel?",
+        "Password reset emails are broken",
+        "I forgot my password",
+        "我忘记密码了",
+        "the login flow is broken",
+    ):
+        assert scan_blocking(text) == [], text
+
+
+def test_a_credential_word_carrying_a_value_still_blocks():
+    for text in (
+        "the password is hunter2",
+        "密码是 abc123",
+        "wifi 是 CoffeeShop2024",
+        "我的 pin 是 4821",
+        "验证码 738291",
+        "the wifi password is Blue-Sky-Rain",
+    ):
+        assert "credentials" in scan_blocking(text), text
+
+
+def test_offer_is_matched_as_a_word_not_a_substring():
+    # "offer" sat in the CJK list, which matches case-sensitive substrings: it
+    # missed "Offer accepted!" and fired inside unrelated uses of the verb.
+    assert "work-confidential" in scan_notice("Offer accepted!")
+    assert "work-confidential" in scan_notice("did the offer come through?")

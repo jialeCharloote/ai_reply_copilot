@@ -224,36 +224,67 @@ def get_conversation_context(
     return messages
 
 
+@dataclass
+class SentSample:
+    """One of the user's own messages, plus what it was answering.
+
+    ``prompt_text`` is the message immediately before it in the same chat. It is
+    carried purely so the voice learner can *screen* the pair: the answer to
+    "what's the wifi password?" is a bare string like ``sunshinecoast``, which
+    carries no secret marker of its own. The only thing that identifies it as a
+    secret lives in the other person's message.
+    """
+
+    text: str
+    prompt_text: str = ""
+
+    @property
+    def pair(self) -> str:
+        return f"{self.prompt_text}\n{self.text}".strip()
+
+
 def sample_sent_messages(
     db_path: Path = DEFAULT_CHAT_DB, limit: int = 400
-) -> List[str]:
-    """The user's own recent messages, across every conversation.
+) -> List[SentSample]:
+    """The user's own recent messages, each with the message it replied to.
 
     This is the raw material for learning their voice (see ``voice.py``): they
     have already written thousands of messages that sound exactly like them, so
     there is no need to make them describe themselves in a questionnaire.
     Read-only, and it never leaves the machine unless the user opts in.
     """
+    # Pull both sides, newest first, so each of the user's messages can be paired
+    # with the one it was answering. ``limit * 3`` is a cheap way to end up with
+    # roughly ``limit`` of the user's own messages after the other side is mixed in.
     query = """
         SELECT m.text           AS text,
-               m.attributedBody AS attributed_body
+               m.attributedBody AS attributed_body,
+               m.is_from_me     AS is_from_me,
+               cmj.chat_id      AS chat_id
         FROM message m
-        WHERE m.is_from_me = 1
+        JOIN chat_message_join cmj ON cmj.message_id = m.ROWID
         ORDER BY m.date DESC
         LIMIT ?
     """
     conn = _connect(db_path)
     try:
-        rows = _fetch(conn, query, (limit,))
+        rows = _fetch(conn, query, (max(limit * 3, limit),))
     finally:
         conn.close()
 
-    texts = []
-    for row in rows:
+    # Walk oldest-first so "the previous message in this chat" is the one already
+    # seen. (The query is newest-first only so that LIMIT keeps the *recent* tail.)
+    previous_in_chat: dict = {}
+    samples: List[SentSample] = []
+    for row in reversed(rows):
         text = _message_text(row["text"], row["attributed_body"])
-        if text:
-            texts.append(text)
-    return texts
+        if not text:
+            continue
+        chat_id = row["chat_id"]
+        if row["is_from_me"]:
+            samples.append(SentSample(text=text, prompt_text=previous_in_chat.get(chat_id, "")))
+        previous_in_chat[chat_id] = text
+    return samples[-limit:]
 
 
 def get_chat_identifier(

@@ -30,13 +30,29 @@ NOTICE = "notice"
 
 # --- things that are actually secret -------------------------------------------
 
-# Word-boundary terms. `\b` works for ASCII; CJK terms are handled below.
+# A credential word alone is not a secret: "Password reset emails are broken" and
+# "I forgot my password" are ordinary work messages. What makes a message
+# dangerous is a credential word *carrying a value* — and the value has to look
+# like a secret, not like a predicate. Requiring merely "\S+" after the word was
+# the bug: it hard-blocked "the wifi is slow" and "the token is expired".
+_SEPARATOR = r"(?:is|are|:|=|是|为)"
+
+# A value that looks like a secret: at least 4 characters, and containing a digit
+# or a symbol. Trailing sentence punctuation is excluded so "expired," does not
+# read as a symbol-bearing value. "slow" / "out" / "broken" never match.
+_SECRETISH = r"(?=[^\s,;.!?，。]*[\d!@#$%^&*_+=/~-])[^\s,;.!?，。]{4,}"
+
+_CREDENTIAL_WORDS = (
+    r"password|passwd|pwd|passcode|passphrase|api[_ -]?key|apikey|access[_ -]?key"
+    r"|secret[_ -]?key|access[_ -]?token|auth[_ -]?token|private[_ -]?key|ssh[_ -]?key"
+    r"|token|secret|pin|otp|one-time code|2fa code|seed phrase|recovery phrase"
+    r"|wifi|wi-fi|login|credentials?"
+)
+_CREDENTIAL_WORDS_CJK = r"密码|口令|验证码|密钥|秘钥|私钥|助记词|暗号"
+
+# Word-boundary terms that are a secret *by themselves* — no value needed, because
+# these phrases do not occur in ordinary conversation.
 _BLOCK_TERMS: Dict[str, Tuple[str, ...]] = {
-    "credentials": (
-        "password", "passcode", "api key", "apikey", "secret key", "access token",
-        "auth token", "private key", "ssh key", "one-time code", "2fa code",
-        "seed phrase", "recovery phrase",
-    ),
     "confidential-marked": (
         "do not share", "don't share", "not for distribution", "internal only",
         "trade secret", "under nda",
@@ -44,7 +60,6 @@ _BLOCK_TERMS: Dict[str, Tuple[str, ...]] = {
 }
 
 _BLOCK_CJK: Dict[str, Tuple[str, ...]] = {
-    "credentials": ("密码", "验证码", "秘钥", "密钥", "私钥", "助记词", "口令", "暗号"),
     "confidential-marked": ("别外传", "不要外传", "请勿外传", "内部资料", "机密"),
 }
 
@@ -89,15 +104,11 @@ _BLOCK_PATTERNS: Dict[str, Tuple[re.Pattern, ...]] = {
         re.compile(r"\brouting\s*(?:number|no\.?|#)?\s*:?\s*\d{9}\b", re.I),
     ),
     "credentials": (
-        # "password: hunter2", "api_key=sk-...", "token is abc123"
-        # "password: hunter2", "pin 是 4821", "wifi 是 CoffeeShop2024".
-        # The value is required: a bare "pin the message" or "the wifi is slow"
-        # must not fire. Chinese separators (是/为) count — this user writes both.
-        re.compile(
-            r"\b(?:password|passwd|pwd|api[_ -]?key|access[_ -]?key|secret[_ -]?key"
-            r"|token|secret|pin|otp|passphrase|wifi|wi-fi)\b\s*(?:is|are|:|=|是|为)\s*\S+",
-            re.I,
-        ),
+        # A credential word carrying a secret-*looking* value:
+        #   "password: hunter2"  "pin 是 4821"  "wifi 是 CoffeeShop2024"
+        # but NOT "the wifi is slow" / "the token is expired" / "the secret is out".
+        re.compile(rf"\b(?:{_CREDENTIAL_WORDS})\b\s*{_SEPARATOR}\s*{_SECRETISH}", re.I),
+        re.compile(rf"(?:{_CREDENTIAL_WORDS_CJK})\s*{_SEPARATOR}?\s*{_SECRETISH}"),
         # Common secret prefixes / shapes.
         re.compile(r"\b(?:sk-[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,}|gh[pousr]_[A-Za-z0-9]{20,})"),
         re.compile(r"\bAKIA[0-9A-Z]{16}\b"),                       # AWS access key id
@@ -125,7 +136,7 @@ _NOTICE_TERMS: Dict[str, Tuple[str, ...]] = {
         "litigation",
     ),
     "work-confidential": (
-        "confidential", "nda", "offer letter", "term sheet", "cap table",
+        "confidential", "nda", "offer", "offer letter", "term sheet", "cap table",
         "layoff", "acquisition",
     ),
 }
@@ -134,7 +145,7 @@ _NOTICE_CJK: Dict[str, Tuple[str, ...]] = {
     "financial": ("工资", "薪资", "薪水", "银行卡", "转账", "汇款", "股票账户", "报销"),
     "medical": ("诊断", "处方", "吃药", "医生说", "手术", "化验", "病历"),
     "legal": ("律师", "起诉", "诉讼", "合同纠纷", "仲裁", "法务"),
-    "work-confidential": ("保密", "offer", "期权", "裁员", "收购"),
+    "work-confidential": ("保密", "期权", "裁员", "收购"),
 }
 
 

@@ -122,3 +122,27 @@ def test_draft_replies_honours_a_language_locked_to_the_channel(tmp_path, monkey
     result = draft_replies(client, channel="C1", llm_client=llm)
     assert "Reply language: 中文" in llm.calls[-1][1]
     assert result.language == "中文"
+
+
+def test_the_learned_voice_can_be_suppressed_by_the_caller(tmp_path, monkeypatch):
+    # draft_from_context used to call load_voice() unconditionally, so the Slack
+    # app uploaded the user's verbatim past messages on every draft — including
+    # when replying to a different person — with no way to opt out.
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    from ai_reply_copilot.storage import save_voice
+    from ai_reply_copilot.voice import learn_voice
+
+    save_voice(learn_voice(["ok 我看下 deck，等下 sync 一下", "sounds good — 我周四之前确认"]))
+
+    messages = load_context(
+        _client([{"ts": "1.0", "text": "can you review the deck?", "user": "U2"}]),
+        channel="C1",
+    ).messages
+
+    on = FakeClient(json.dumps({"understanding": "u", "candidates": ["a"]}))
+    draft_from_context(messages, client=on)
+    assert "How the user actually writes" in on.calls[-1][1]
+
+    off = FakeClient(json.dumps({"understanding": "u", "candidates": ["a"]}))
+    draft_from_context(messages, client=off, use_voice=False)
+    assert "How the user actually writes" not in off.calls[-1][1]

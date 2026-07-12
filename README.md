@@ -43,7 +43,15 @@ a reviewed sending path, and an end-to-end `reply` command.
   leave the machine; the verbatim examples *are* part of the prompt, so they are
   uploaded with every draft, which is why saving them requires an explicit yes,
   why messages containing secrets are screened out first, and why
-  `--examples 0` gives you statistics only. `charla voice forget` undoes it.
+  `--examples 0` gives you statistics only. `charla voice forget` undoes it, and
+  `CHARLA_NO_VOICE=1` turns it off for the Slack app without discarding what was
+  learned.
+
+  Screening looks at the message **and what it was replying to** — the answer to
+  "what's the wifi password?" is a bare word like `sunshinecoast`, and nothing in
+  that word marks it as a secret; only the question does. Exemplars are also
+  re-screened every time they are loaded, so tightening the rules retroactively
+  protects a profile that was saved under looser ones.
 - A **sensitive-content gate, split by severity.** An actual secret — a password,
   an API key, a card/SSN number, an explicit "don't share this" — stops and asks.
   A sensitive *topic* — a salary, an offer letter, a contract, a diagnosis — is

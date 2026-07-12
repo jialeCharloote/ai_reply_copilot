@@ -170,3 +170,115 @@ VOICE = [
 
 def test_the_paranoia_does_not_eat_the_voice():
     assert pick_exemplars(VOICE, limit=20) == VOICE
+
+
+# --- the leaks a first pass missed ---------------------------------------------
+
+
+HYPHENATED = [
+    "Tulip-Garden-88",                      # wifi/door code, digits + hyphens
+    "the front door is Blue-Sky-Rain",      # capitalised code phrase, no digits
+]
+
+
+@pytest.mark.parametrize("secret", HYPHENATED)
+def test_hyphenated_codes_are_not_exemplars(secret):
+    # The token/password patterns excluded `-` from their character classes, so
+    # every hyphenated passphrase walked straight through.
+    assert pick_exemplars([secret]) == []
+
+
+def test_a_bare_secret_is_caught_by_what_it_was_answering():
+    # The structural hole: "sunshinecoast" carries no marker of its own. The only
+    # thing that identifies it as a secret is the question it answers, which lives
+    # in the *other* person's message — so screening the user's message alone is
+    # blind to it by construction.
+    from ai_reply_copilot.imessage import SentSample
+
+    asked = SentSample(text="sunshinecoast", prompt_text="hey what's the wifi password?")
+    assert pick_exemplars([asked]) == []
+    asked_zh = SentSample(text="hunter2isgreat", prompt_text="密码是多少？")
+    assert pick_exemplars([asked_zh]) == []
+
+    # …and the same message is a perfectly good exemplar when it answers something
+    # innocuous. The context is what decides, not the words.
+    innocuous = SentSample(text="sunshinecoast", prompt_text="what should we call the release?")
+    assert pick_exemplars([innocuous]) == ["sunshinecoast"]
+
+
+def test_common_professional_words_are_not_treated_as_secrets():
+    # `code`, `key`, `account` and `login` are four of the commonest words in
+    # professional English. Rejecting on them silently biased the exemplar pool
+    # away from exactly the register this product exists to imitate.
+    work = [
+        "I'll review the code tomorrow morning, sounds good",
+        "the key thing is we ship before the demo",
+        "let me check my account and get back to you",
+        "can you send me the login flow mock?",
+        "I think the key insight is that users don't read",
+        "sounds good, let's sync at 3 and lock the code freeze",
+    ]
+    assert pick_exemplars(work, limit=20) == work
+
+
+# --- a stale or corrupt profile must not keep leaking ---------------------------
+
+
+def test_a_profile_from_an_older_screen_is_ignored(tmp_path, monkeypatch):
+    import json as _json
+
+    from ai_reply_copilot.storage import load_voice, voice_path
+
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    voice_path().parent.mkdir(parents=True, exist_ok=True)
+    # No version field: written before the current (stricter) screen existed, so
+    # its exemplars were vetted under weaker rules and cannot be trusted.
+    voice_path().write_text(
+        _json.dumps({"sampled": 5, "exemplars": ["my password is hunter2"]}), encoding="utf-8"
+    )
+    assert load_voice() is None  # force a re-learn
+
+
+def test_exemplars_are_re_screened_on_load(tmp_path, monkeypatch):
+    import json as _json
+
+    from ai_reply_copilot.storage import load_voice, voice_path
+    from ai_reply_copilot.voice import VOICE_SCHEMA_VERSION
+
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    voice_path().parent.mkdir(parents=True, exist_ok=True)
+    voice_path().write_text(
+        _json.dumps({
+            "version": VOICE_SCHEMA_VERSION,
+            "sampled": 5,
+            "exemplars": ["Tulip-Garden-88", "ok 我看下 deck，等下 sync 一下"],
+        }),
+        encoding="utf-8",
+    )
+    profile = load_voice()
+    # Screening happens at learn time, so a secret that slipped past an older rule
+    # would otherwise keep uploading forever. Re-screen on every load.
+    assert profile.exemplars == ["ok 我看下 deck，等下 sync 一下"]
+
+
+def test_a_corrupt_profile_degrades_instead_of_crashing_every_draft(tmp_path, monkeypatch):
+    import json as _json
+
+    from ai_reply_copilot.storage import load_voice, voice_path
+    from ai_reply_copilot.voice import VOICE_SCHEMA_VERSION, describe_for_prompt
+
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    voice_path().parent.mkdir(parents=True, exist_ok=True)
+    voice_path().write_text(
+        _json.dumps({
+            "version": VOICE_SCHEMA_VERSION,
+            "sampled": 5,
+            "emoji_rate": "high",       # wrong type: used to raise inside describe()
+            "exemplars": "hunter2",     # a string, not a list: used to be iterated per character
+        }),
+        encoding="utf-8",
+    )
+    profile = load_voice()
+    assert profile.emoji_rate == 0.0
+    assert profile.exemplars == []
+    describe_for_prompt(profile)  # must not raise on any draft path

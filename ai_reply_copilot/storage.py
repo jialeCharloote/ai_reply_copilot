@@ -157,8 +157,19 @@ def voice_path() -> Path:
 
 
 def load_voice() -> Optional["VoiceProfile"]:
-    """The learned voice profile, if the user has run `charla voice learn`."""
-    from .voice import VoiceProfile
+    """The learned voice profile, if the user has run `charla voice learn`.
+
+    Defensive on two axes:
+
+    - **Types.** A hand-edited or truncated ``voice.json`` must not crash a draft.
+      A bad field degrades to its default rather than raising deep inside the
+      prompt builder on every single reply.
+    - **Staleness.** Exemplars are screened at learn time, so a profile written by
+      an older, weaker screen would keep uploading its secrets forever. They are
+      re-screened here on every load, and a profile from an older schema version
+      is ignored outright so the user re-learns under the current rules.
+    """
+    from .voice import VOICE_SCHEMA_VERSION, VoiceProfile, is_safe_exemplar
 
     path = voice_path()
     if not path.exists():
@@ -169,14 +180,37 @@ def load_voice() -> Optional["VoiceProfile"]:
         return None
     if not isinstance(data, dict):
         return None
-    known = {f.name for f in fields(VoiceProfile)}
-    return VoiceProfile(**{k: v for k, v in data.items() if k in known})
+    if data.get("version") != VOICE_SCHEMA_VERSION:
+        return None  # screened under older rules — make the user re-learn
+
+    defaults = {f.name: f for f in fields(VoiceProfile)}
+    values = {}
+    for name, spec in defaults.items():
+        if name not in data:
+            continue
+        raw = data[name]
+        if name == "exemplars":
+            if not isinstance(raw, list):
+                continue
+            # Re-screen: the current rules, not whatever was in force when saved.
+            values[name] = [e for e in raw if isinstance(e, str) and is_safe_exemplar(e)]
+        elif name == "sampled" or name == "median_chars":
+            if isinstance(raw, int) and not isinstance(raw, bool):
+                values[name] = raw
+        elif name == "version":
+            continue
+        elif isinstance(raw, (int, float)) and not isinstance(raw, bool):
+            values[name] = float(raw)
+    return VoiceProfile(**values)
 
 
 def save_voice(profile: "VoiceProfile") -> Path:
+    from .voice import VOICE_SCHEMA_VERSION
+
     _ensure_dir()
     path = voice_path()
     payload = asdict(profile)
+    payload["version"] = VOICE_SCHEMA_VERSION
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     os.replace(tmp, path)

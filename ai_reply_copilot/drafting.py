@@ -111,12 +111,18 @@ def draft_from_context(
     num: int = 3,
     source: str = "slack",
     target: Optional[str] = None,
+    use_voice: bool = True,
 ) -> ReplySuggestion:
     """Turn already-read context into an understanding + reply candidates.
 
     The reply language is resolved per conversation here, so every front-end gets
     the same behaviour: an English channel is answered in English even if the
     style profile says 中文 (the profile is only a fallback).
+
+    ``use_voice=False`` suppresses the learned voice, whose exemplars are verbatim
+    past messages of the user's. That has to be a caller's decision — it used to
+    be loaded unconditionally, so the Slack app uploaded them with no way to opt
+    out. (``charla voice forget`` is the other off switch.)
     """
     locked = get_conversation_language(source, target) if target else None
     language, _reason = resolve_language(
@@ -132,7 +138,7 @@ def draft_from_context(
         style=style,
         num_candidates=num,
         language=language,
-        voice=describe_for_prompt(load_voice()),
+        voice=describe_for_prompt(load_voice()) if use_voice else None,
     )
 
 
@@ -151,6 +157,7 @@ def draft_replies(
     limit: int = 20,
     llm_client=None,
     allow_sensitive: bool = False,
+    use_voice: bool = True,
 ) -> DraftResult:
     """Convenience: read context and draft in one call.
 
@@ -186,6 +193,7 @@ def draft_replies(
         # ignored and the thread gets re-detected every time.
         source="slack",
         target=channel,
+        use_voice=use_voice,
     )
     return DraftResult(
         understanding=suggestion.understanding,

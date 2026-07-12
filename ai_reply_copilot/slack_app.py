@@ -328,6 +328,10 @@ def build_app(*, user_token: Optional[str] = None, llm_factory=None):
                 style=load_style_profile(),
                 source="slack",
                 target=meta.get("channel"),
+                # The learned voice sends verbatim past messages of yours to the
+                # model on every draft. The Slack modal has no flags, so this is
+                # the opt-out (`charla voice forget` is the other one).
+                use_voice=not os.environ.get("CHARLA_NO_VOICE"),
             )
         except Exception as exc:  # surface generation failures in the modal
             logger.exception("Charla draft failed")

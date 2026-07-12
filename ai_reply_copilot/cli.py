@@ -670,13 +670,22 @@ def _cmd_voice(args: argparse.Namespace) -> int:
         return 0
 
     # learn
-    texts = sample_sent_messages(db_path=args.db, limit=args.sample)
-    if not texts:
+    samples = sample_sent_messages(db_path=args.db, limit=args.sample)
+    if not samples:
         print("Found none of your own messages in chat.db — nothing to learn from.")
         return 1
 
-    profile = learn_voice(texts, exemplar_limit=max(0, args.examples))
+    wanted = max(0, args.examples)
+    profile = learn_voice(samples, exemplar_limit=wanted)
     print(_render_voice(profile))
+    if wanted and len(profile.exemplars) < wanted:
+        # Say so rather than quietly shipping a thin (or empty) exemplar set: the
+        # screen is deliberately paranoid, and silence would read as success.
+        print(
+            f"\n  (Only {len(profile.exemplars)} of your messages passed the safety "
+            f"screen out of {profile.sampled} sampled — {wanted} were wanted. Raise "
+            "--sample to look further back.)"
+        )
     print()
     print(
         "Statistics stay on this machine. Voice examples are part of the prompt, so\n"
