@@ -108,3 +108,40 @@ def test_flow_dry_run_skips_confirm():
     )
     assert result is not None
     assert sent[0].dry_run is True
+
+
+def test_editing_prefills_the_draft_instead_of_making_you_retype_it():
+    # The single most-used step of the core loop: "Edit the reply:" used to be an
+    # empty line, so tweaking one word meant retyping 300 characters — which is
+    # the reason to abandon the flow rather than fix it.
+    send_fn, sent = _recording_send()
+    seen = {}
+
+    def fake_edit(prompt_text, initial):
+        seen["initial"] = initial          # the candidate is handed to the editor
+        return initial.replace("8", "9")   # …and the user tweaks it in place
+
+    run_reply_flow(
+        _messages(), _llm(), send_fn,
+        prompt=_scripted_prompt(["e2", "y"]),
+        output=lambda _s: None,
+        edit=fake_edit,
+    )
+    assert seen["initial"] == "Can we do 8?"   # prefilled, not blank
+    assert sent[0].text == "Can we do 9?"
+
+
+def test_exit_cancels_instead_of_being_read_as_an_edit():
+    # `choice.startswith("e")` swallowed "exit", which then failed to parse as an
+    # index and reported "Invalid choice" instead of quitting.
+    send_fn, sent = _recording_send()
+    said = []
+    result = run_reply_flow(
+        _messages(), _llm(), send_fn,
+        prompt=_scripted_prompt(["exit"]),
+        output=said.append,
+    )
+    assert result is None
+    assert sent == []
+    assert "Cancelled." in said
+    assert "Invalid choice." not in said

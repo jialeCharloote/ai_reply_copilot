@@ -8,26 +8,32 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.error
-import urllib.request
 from typing import Optional
+
+from .net import HttpError, request_json
 
 
 class LLMError(RuntimeError):
     """Raised when an LLM request cannot be made or fails."""
 
 
-def _post_json(url: str, headers: dict, payload: dict, timeout: int = 60) -> dict:
-    data = json.dumps(payload).encode("utf-8")
-    request = urllib.request.Request(url, data=data, headers=headers, method="POST")
+def _post_json(url: str, headers: dict, payload: dict, timeout: int = 60, **kwargs) -> dict:
+    """POST JSON, retrying rate limits and server errors (see ``net.py``).
+
+    A single 429 or a transient 529 overload used to lose the whole draft, along
+    with the context that had just been read.
+    """
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:  # pragma: no cover - network dependent
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise LLMError(f"HTTP {exc.code} from {url}: {detail}") from exc
-    except urllib.error.URLError as exc:  # pragma: no cover - network dependent
-        raise LLMError(f"Could not reach {url}: {exc.reason}") from exc
+        return request_json(
+            url,
+            headers=headers,
+            data=json.dumps(payload).encode("utf-8"),
+            method="POST",
+            timeout=timeout,
+            **kwargs,
+        )
+    except HttpError as exc:
+        raise LLMError(str(exc)) from exc
 
 
 class FakeClient:

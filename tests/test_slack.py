@@ -174,3 +174,74 @@ def test_read_client_prefers_the_user_token(monkeypatch):
     assert read_client().token == "xoxp-me"
     monkeypatch.delenv("SLACK_USER_TOKEN")
     assert read_client().token == "xoxb-bot"
+
+
+# --- listing conversations must not lie about coverage --------------------------
+
+
+def _many_channels(count, *, history_error=None):
+    channels = [{"id": f"C{i}", "name": f"chan{i}", "is_im": False} for i in range(count)]
+
+    def history(params):
+        if history_error and params["channel"] == "C1":
+            return {"ok": False, "error": history_error}
+        return {"ok": True, "messages": [{"ts": "1000.0", "text": "hi", "user": "U2"}]}
+
+    return FakeSlackClient({
+        "conversations.list": {"ok": True, "channels": channels},
+        "conversations.history": history,
+        "users.info": {"ok": True, "user": {"profile": {"display_name": "Alex"}}},
+    })
+
+
+def test_the_probe_count_is_bounded_and_the_shortfall_is_reported():
+    # conversations.history is Tier 3 (~50/min) and there is one call per channel,
+    # so probing a real workspace rate-limits within seconds. Bounding it is fine;
+    # doing so *silently* is not — the user would read a truncated list as complete.
+    from ai_reply_copilot import slack as slack_module
+
+    client = _many_channels(120)
+    notes = []
+    slack_module.list_conversations(client, limit=20, max_probes=10, report=notes.append)
+    assert any("120" in n and "10" in n for n in notes)
+
+
+def test_no_report_when_coverage_is_complete():
+    notes = []
+    list_conversations(_many_channels(3), report=notes.append)
+    assert notes == []
+
+
+def test_an_unreadable_channel_is_skipped_and_counted():
+    notes = []
+    conversations = list_conversations(
+        _many_channels(3, history_error="not_in_channel"), report=notes.append
+    )
+    assert [c.channel_id for c in conversations] == ["C2", "C0"]  # C1 skipped
+    assert any("not readable" in n for n in notes)
+
+
+def test_a_rate_limit_is_not_swallowed_channel_by_channel():
+    # THE bug: every per-channel failure was `continue`d, so a 429 silently
+    # dropped channels and "your most recent conversation" could quietly be the
+    # wrong one. A rate limit is about the request, not about that one channel.
+    with pytest.raises(SlackError):
+        list_conversations(_many_channels(3, history_error="ratelimited"))
+
+
+def test_channel_pagination_follows_the_cursor():
+    # The old code asked for 200 with no cursor, so a bigger workspace silently
+    # lost everything past the first page.
+    pages = iter([
+        {"ok": True, "channels": [{"id": "C0", "name": "a", "is_im": False}],
+         "response_metadata": {"next_cursor": "abc"}},
+        {"ok": True, "channels": [{"id": "C1", "name": "b", "is_im": False}],
+         "response_metadata": {"next_cursor": ""}},
+    ])
+    client = FakeSlackClient({
+        "conversations.list": lambda params: next(pages),
+        "conversations.history": lambda p: {
+            "ok": True, "messages": [{"ts": "1000.0", "text": "hi", "user": "U2"}]
+        },
+    })
+    assert {c.channel_id for c in list_conversations(client)} == {"C0", "C1"}

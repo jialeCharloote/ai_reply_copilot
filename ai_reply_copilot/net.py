@@ -55,9 +55,13 @@ def request_json(
     method: str = "GET",
     timeout: int = 30,
     max_attempts: int = MAX_ATTEMPTS,
-    sleep: Callable[[float], None] = time.sleep,
+    sleep: Optional[Callable[[float], None]] = None,
 ) -> dict:
     """Perform a JSON request, retrying rate limits and server errors."""
+    # Resolved at call time, not bound as a default: a default argument captures
+    # ``time.sleep`` at import and no test could ever patch it out, so the suite
+    # would really sleep through the backoff.
+    sleep = sleep or time.sleep
     last: Optional[HttpError] = None
 
     for attempt in range(max_attempts):

@@ -13,20 +13,29 @@ from __future__ import annotations
 
 import json
 import os
-import urllib.error
+import time
 import urllib.parse
-import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from .models import Message
+from .net import HttpError, request_json
 
 SLACK_API_BASE = "https://slack.com/api"
 
 
 class SlackError(RuntimeError):
-    """Raised when a Slack API call fails or the token is missing."""
+    """Raised when a Slack API call fails or the token is missing.
+
+    ``error`` carries Slack's own error code (``missing_scope``, ``ratelimited``,
+    ``channel_not_found``, …) so callers can tell "you lack a scope" apart from
+    "that channel does not exist" instead of swallowing both.
+    """
+
+    def __init__(self, message: str, *, error: Optional[str] = None):
+        super().__init__(message)
+        self.error = error
 
 
 @dataclass
@@ -60,7 +69,8 @@ _FROM_ENV = object()  # distinct from None, which means "caller had no token"
 class SlackClient:
     """Thin Slack Web API wrapper over the standard library."""
 
-    def __init__(self, token=_FROM_ENV, timeout: int = 30, token_name: str = "SLACK_BOT_TOKEN"):
+    def __init__(self, token=_FROM_ENV, timeout: int = 30, token_name: str = "SLACK_BOT_TOKEN",
+                 sleep=time.sleep):
         if token is _FROM_ENV:
             token = os.environ.get(token_name)
         elif token is None:
@@ -70,49 +80,53 @@ class SlackClient:
         self.token = token
         self.token_name = token_name
         self.timeout = timeout
+        self._sleep = sleep  # injectable so tests exercise backoff without waiting
         self._user_cache: Dict[str, str] = {}
         self._auth_user_id: Optional[str] = None
 
-    def call(self, method: str, params: Optional[dict] = None) -> dict:
+    def _request(self, method: str, url: str, *, data: Optional[bytes] = None,
+                 http_method: str = "GET") -> dict:
+        """One request, with the retry policy from ``net.py``.
+
+        Slack rate-limits hard (conversations.history is ~50 req/min). The old
+        code caught ``URLError`` — which ``HTTPError`` subclasses — so a 429 was
+        flattened into "could not reach Slack" and the ``Retry-After`` header the
+        server had just handed us was discarded.
+        """
         if not self.token:
             raise SlackError(f"{self.token_name} is not set.")
+        headers = {"Authorization": f"Bearer {self.token}"}
+        if data is not None:
+            headers["Content-Type"] = "application/json; charset=utf-8"
+        try:
+            payload = request_json(
+                url,
+                headers=headers,
+                data=data,
+                method=http_method,
+                timeout=self.timeout,
+                sleep=self._sleep,
+            )
+        except HttpError as exc:
+            raise SlackError(f"Slack request failed: {exc}") from exc
+        if not payload.get("ok"):
+            error = payload.get("error")
+            raise SlackError(f"Slack API error on {method}: {error}", error=error)
+        return payload
+
+    def call(self, method: str, params: Optional[dict] = None) -> dict:
         url = f"{SLACK_API_BASE}/{method}"
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
-        request = urllib.request.Request(
-            url, headers={"Authorization": f"Bearer {self.token}"}, method="GET"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as exc:  # pragma: no cover - network dependent
-            raise SlackError(f"Could not reach Slack: {exc}") from exc
-        if not data.get("ok"):
-            raise SlackError(f"Slack API error on {method}: {data.get('error')}")
-        return data
+        return self._request(method, url)
 
     def post(self, method: str, payload: dict) -> dict:
-        if not self.token:
-            raise SlackError(f"{self.token_name} is not set.")
-        url = f"{SLACK_API_BASE}/{method}"
-        data = json.dumps(payload).encode("utf-8")
-        request = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {self.token}",
-                "Content-Type": "application/json; charset=utf-8",
-            },
-            method="POST",
+        return self._request(
+            method,
+            f"{SLACK_API_BASE}/{method}",
+            data=json.dumps(payload).encode("utf-8"),
+            http_method="POST",
         )
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                result = json.loads(response.read().decode("utf-8"))
-        except urllib.error.URLError as exc:  # pragma: no cover - network dependent
-            raise SlackError(f"Could not reach Slack: {exc}") from exc
-        if not result.get("ok"):
-            raise SlackError(f"Slack API error on {method}: {result.get('error')}")
-        return result
 
     def post_message(
         self, channel: str, text: str, *, thread_ts: Optional[str] = None
@@ -183,11 +197,13 @@ class FakeSlackClient(SlackClient):
 
     def call(self, method: str, params: Optional[dict] = None) -> dict:
         if method not in self._responses:
-            raise SlackError(f"Slack API error on {method}: not_configured")
+            raise SlackError(f"Slack API error on {method}: not_configured", error="not_configured")
         handler = self._responses[method]
         data = handler(params or {}) if callable(handler) else handler
         if not data.get("ok", True):
-            raise SlackError(f"Slack API error on {method}: {data.get('error')}")
+            raise SlackError(
+                f"Slack API error on {method}: {data.get('error')}", error=data.get("error")
+            )
         return data
 
     def post(self, method: str, payload: dict) -> dict:
@@ -195,36 +211,85 @@ class FakeSlackClient(SlackClient):
         handler = self._responses.get(method, {"ok": True, "ts": "1000.0001"})
         data = handler(payload) if callable(handler) else handler
         if not data.get("ok", True):
-            raise SlackError(f"Slack API error on {method}: {data.get('error')}")
+            raise SlackError(
+                f"Slack API error on {method}: {data.get('error')}", error=data.get("error")
+            )
         return data
 
 
-def list_conversations(
-    client: SlackClient, limit: int = 20
-) -> List[SlackConversation]:
-    """List channels/DMs the token can see, most recently active first."""
-    data = client.call(
-        "conversations.list",
-        {
+# Slack's conversations.list does not report each channel's last message, so
+# ordering by recency costs one conversations.history call per channel — and that
+# method is Tier 3 (~50 requests/minute). Probing every channel in a real
+# workspace therefore rate-limits within seconds. The probe count is bounded, and
+# what got skipped is reported rather than silently dropped: a quietly truncated
+# list means "your most recent conversation" can quietly be the wrong one.
+MAX_HISTORY_PROBES = 50
+MAX_CHANNEL_PAGES = 5
+
+# Errors that mean "this one channel is not readable" — worth skipping. Anything
+# else (auth failure, exhausted rate limit) is about the whole request and must
+# not be swallowed channel by channel.
+_SKIPPABLE = frozenset(
+    {"channel_not_found", "not_in_channel", "missing_scope", "restricted_action",
+     "is_archived", "no_permission"}
+)
+
+
+def _iter_channels(client: SlackClient) -> List[dict]:
+    """All conversations the token can see, following Slack's cursor pagination.
+
+    The old code asked for 200 with no cursor, so a workspace with more simply
+    lost the rest, silently.
+    """
+    channels: List[dict] = []
+    cursor = None
+    for _page in range(MAX_CHANNEL_PAGES):
+        params = {
             "types": "public_channel,private_channel,im,mpim",
             "exclude_archived": "true",
             "limit": 200,
-        },
-    )
+        }
+        if cursor:
+            params["cursor"] = cursor
+        data = client.call("conversations.list", params)
+        channels.extend(data.get("channels", []))
+        cursor = (data.get("response_metadata") or {}).get("next_cursor") or ""
+        if not cursor:
+            break
+    return channels
+
+
+def list_conversations(
+    client: SlackClient,
+    limit: int = 20,
+    *,
+    max_probes: int = MAX_HISTORY_PROBES,
+    report=None,
+) -> List[SlackConversation]:
+    """List channels/DMs the token can see, most recently active first.
+
+    ``report`` is called with a human-readable note when coverage is incomplete —
+    silence there would read as "we looked at everything", which is exactly how a
+    truncated list turns into the wrong "most recent conversation".
+    """
+    channels = _iter_channels(client)
+    probed = channels[:max_probes]
+
     conversations: List[SlackConversation] = []
-    for channel in data.get("channels", []):
+    unreadable = 0
+    for channel in probed:
         channel_id = channel.get("id", "")
         is_im = bool(channel.get("is_im"))
-        if is_im:
-            name = client.user_name(channel.get("user")) or ""
-        else:
-            name = channel.get("name", "")
+        name = client.user_name(channel.get("user")) or "" if is_im else channel.get("name", "")
         try:
             history = client.call(
                 "conversations.history", {"channel": channel_id, "limit": 1}
             )
-        except SlackError:
-            continue
+        except SlackError as exc:
+            if exc.error in _SKIPPABLE:
+                unreadable += 1
+                continue
+            raise  # rate limit, bad auth: about the request, not this channel
         latest = (history.get("messages") or [{}])[0]
         conversations.append(
             SlackConversation(
@@ -236,8 +301,26 @@ def list_conversations(
             )
         )
 
+    if report:
+        skipped = len(channels) - len(probed)
+        if skipped:
+            # Deliberately not "the most likely": these are simply the first N in
+            # whatever order Slack returned, and claiming otherwise would let a
+            # partial answer read as a complete one.
+            report(
+                f"Only checked {len(probed)} of {len(channels)} conversations for recent "
+                f"activity ({skipped} unchecked — Slack rate-limits the per-channel "
+                "lookup this needs). The most recent may be among the unchecked; pass a "
+                "channel ID directly to target one."
+            )
+        if unreadable:
+            report(f"{unreadable} conversation(s) were not readable with this token.")
+
     conversations.sort(
-        key=lambda c: c.last_message_at or datetime.min.replace(tzinfo=timezone.utc),
+        key=lambda c: (
+            c.last_message_at or datetime.min.replace(tzinfo=timezone.utc),
+            c.channel_id,  # stable order when timestamps tie
+        ),
         reverse=True,
     )
     return conversations[:limit]

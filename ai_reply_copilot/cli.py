@@ -312,7 +312,7 @@ def _cmd_show(args: argparse.Namespace) -> int:
 
 def _cmd_slack_list(args: argparse.Namespace) -> int:
     client = read_client()
-    conversations = slack_reader.list_conversations(client, limit=args.limit)
+    conversations = slack_reader.list_conversations(client, limit=args.limit, report=_note)
     if not conversations:
         print("No Slack conversations found.")
         return 0
@@ -353,7 +353,9 @@ def _resolve_target(args: argparse.Namespace) -> Optional[str]:
     if args.target is not None:
         return args.target
     if args.source == "slack":
-        conversations = slack_reader.list_conversations(read_client(), limit=1)
+        # report=_note: a silently truncated list would make this pick the wrong
+        # conversation and never say so.
+        conversations = slack_reader.list_conversations(read_client(), limit=1, report=_note)
         if not conversations:
             _note("No Slack conversations found.")
             return None
