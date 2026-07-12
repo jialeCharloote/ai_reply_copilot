@@ -54,18 +54,28 @@ def slack_ts_to_datetime(ts: Optional[str]) -> Optional[datetime]:
         return None
 
 
+_FROM_ENV = object()  # distinct from None, which means "caller had no token"
+
+
 class SlackClient:
     """Thin Slack Web API wrapper over the standard library."""
 
-    def __init__(self, token: Optional[str] = None, timeout: int = 30):
-        self.token = token or os.environ.get("SLACK_BOT_TOKEN")
+    def __init__(self, token=_FROM_ENV, timeout: int = 30, token_name: str = "SLACK_BOT_TOKEN"):
+        if token is _FROM_ENV:
+            token = os.environ.get(token_name)
+        elif token is None:
+            # An explicit None used to fall through to SLACK_BOT_TOKEN, which
+            # silently posted as the bot when the user token was missing.
+            raise SlackError(f"{token_name} is required; refusing to fall back to another token.")
+        self.token = token
+        self.token_name = token_name
         self.timeout = timeout
         self._user_cache: Dict[str, str] = {}
         self._auth_user_id: Optional[str] = None
 
     def call(self, method: str, params: Optional[dict] = None) -> dict:
         if not self.token:
-            raise SlackError("SLACK_BOT_TOKEN is not set.")
+            raise SlackError(f"{self.token_name} is not set.")
         url = f"{SLACK_API_BASE}/{method}"
         if params:
             url = f"{url}?{urllib.parse.urlencode(params)}"
@@ -83,7 +93,7 @@ class SlackClient:
 
     def post(self, method: str, payload: dict) -> dict:
         if not self.token:
-            raise SlackError("SLACK_BOT_TOKEN is not set.")
+            raise SlackError(f"{self.token_name} is not set.")
         url = f"{SLACK_API_BASE}/{method}"
         data = json.dumps(payload).encode("utf-8")
         request = urllib.request.Request(
@@ -132,6 +142,30 @@ class SlackClient:
             except SlackError:
                 self._user_cache[user_id] = user_id
         return self._user_cache[user_id]
+
+
+def read_client(timeout: int = 30) -> SlackClient:
+    """Client for reading context.
+
+    Prefers your user token (the Slack app manifest grants the history scopes to
+    the user token; the bot only gets ``commands``), and falls back to a bot
+    token for the CLI setup documented in the README, which asks for a bot token
+    carrying the history scopes.
+    """
+    if os.environ.get("SLACK_USER_TOKEN"):
+        return SlackClient(timeout=timeout, token_name="SLACK_USER_TOKEN")
+    return SlackClient(timeout=timeout, token_name="SLACK_BOT_TOKEN")
+
+
+def posting_client(timeout: int = 30) -> SlackClient:
+    """Client for sending. Charla posts *as you*, so this requires the user token
+    and will never quietly post as the bot instead."""
+    if not os.environ.get("SLACK_USER_TOKEN"):
+        raise SlackError(
+            "SLACK_USER_TOKEN is not set. Charla sends as you, which needs your "
+            "xoxp user token (scope chat:write) — it will not post as the bot instead."
+        )
+    return SlackClient(timeout=timeout, token_name="SLACK_USER_TOKEN")
 
 
 class FakeSlackClient(SlackClient):

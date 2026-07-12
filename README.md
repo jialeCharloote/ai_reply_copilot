@@ -23,10 +23,40 @@ a reviewed sending path, and an end-to-end `reply` command.
 - An end-to-end `reply` command that reads a conversation, generates candidates,
   lets you pick or edit one, and sends after confirmation — the PRD core loop.
 - Local-first personal style profile (applied to suggestions) and a feedback log.
-- Bilingual by default: replies match the conversation's language (natural
-  Chinese/English mixing, no translationese); your profile language wins.
-- A sensitive-content reminder (financial/medical/legal/confidential/credentials,
-  EN + ZH) before context is sent to a cloud model; `reply` asks to continue.
+- **Bilingual, per conversation.** The reply language belongs to the *thread*,
+  not to a global setting — your work Slack is English and your friends are
+  Chinese, so one global switch is always wrong for half your day. Charla detects
+  the language from the recent messages (locally, no model call), and Chinese
+  keeps English loanwords ("这个 API 什么时候 deploy?" is Chinese, not "mixed").
+  You can pin a conversation with `--language X --remember-language`, or override
+  one run with `--language`. The style profile's language is only a **fallback**
+  for when a thread gives no signal — it never overrides the conversation.
+- **You can see what it read.** Before the drafts, Charla prints the exact
+  messages it used, marks what arrived *since your last reply*, says which
+  language it will answer in and why, and lists what is still waiting on you
+  (unanswered questions, decisions, deadlines). `--no-context` hides the panel.
+- **Learns your voice from messages you actually sent.** `charla voice learn`
+  reads your own past messages out of `chat.db` (`is_from_me`) and works out how
+  you really write — length, emoji, punctuation, capitalisation, how much you
+  code-switch — then keeps a handful verbatim as examples. A model imitates real
+  sentences far better than it imitates the adjective "casual". Statistics never
+  leave the machine; the verbatim examples *are* part of the prompt, so they are
+  uploaded with every draft, which is why saving them requires an explicit yes,
+  why messages containing secrets are screened out first, and why
+  `--examples 0` gives you statistics only. `charla voice forget` undoes it.
+- A **sensitive-content gate, split by severity.** An actual secret — a password,
+  an API key, a card/SSN number, an explicit "don't share this" — stops and asks.
+  A sensitive *topic* — a salary, an offer letter, a contract, a diagnosis — is
+  reported but never interrupts. That split is deliberate: the first wedge is
+  professional replies, so a gate that fired on "salary" would fire on nearly
+  every conversation Charla exists for, and users would learn to click past it.
+  The gate runs before *any* cloud call, scans your `--draft` too, and is not
+  waived by `--dry-run` (which only suppresses the *send* — the context is still
+  uploaded to draft) nor by `--yes` (a send flag, not a privacy decision). When
+  there is nobody to ask (`--json`), it refuses instead of uploading and exits
+  **3**; pass `--allow-sensitive` to opt in. The menu-bar app keys off that exit
+  code to offer its own "Draft anyway", so the gate is a real choice on every
+  surface rather than a dead end.
 
 Reading is strictly read-only. Sending always requires confirmation (or an
 explicit `--yes`) and only sends plain text — no private-API tricks.
@@ -36,9 +66,13 @@ explicit `--yes`) and only sends plain text — no private-API tricks.
 - Python 3.9+ (no third-party runtime dependencies)
 - macOS with **Full Disk Access** granted to the terminal/app running this
   (needed to read `~/Library/Messages/chat.db`).
-- For Slack: `SLACK_BOT_TOKEN` with read scopes (`channels:history`,
-  `groups:history`, `im:history`, `channels:read`, `users:read`).
-- For `suggest`: an API key via `OPENAI_API_KEY` or `ANTHROPIC_API_KEY`.
+- For Slack reads: a token with read scopes (`channels:history`, `groups:history`,
+  `im:history`, `channels:read`, `users:read`) — `SLACK_USER_TOKEN` is used when
+  set, otherwise `SLACK_BOT_TOKEN`.
+- For Slack **sends**: `SLACK_USER_TOKEN` (`chat:write`). Charla posts as you, so
+  it will not fall back to the bot token.
+- For `suggest`: an API key. The default provider is Anthropic
+  (`ANTHROPIC_API_KEY`); `--provider openai` uses `OPENAI_API_KEY`.
 
 ## Install
 
@@ -90,10 +124,26 @@ In `reply`, pick a candidate by number, type `e<n>` to edit one before
 sending, or `q` to cancel. You confirm before anything is sent.
 
 ```bash
-# Personal style profile (local-first; applied automatically to suggestions)
-charla profile set --formality casual --no-emoji --language 中英双语
+# Language follows the conversation. Nothing to configure for the common case:
+charla reply C0123456789 --source slack   # English channel -> English drafts
+charla reply 42                           # 中文对话        -> 中文回复
+
+# Pin one conversation (e.g. a Chinese colleague you always write to in English)
+charla suggest 42 --language English --remember-language
+charla suggest 42 --language 中文          # just this once
+
+# Learn how you actually write, from your own past messages. Do this once.
+charla voice learn                  # shows what it learned, asks before saving
+charla voice learn --examples 0     # statistics only — nothing of yours uploaded
+charla voice show                   # incl. exactly which messages get uploaded
+charla voice forget
+
+# Personal style profile (local-first; applied automatically to suggestions).
+# --language here is only a FALLBACK for threads with no language signal; it
+# does not override the conversation.
+charla profile set --formality casual --no-emoji --language 中文
 charla profile show
-charla suggest 42 --ignore-profile   # opt out for one run
+charla suggest 42 --ignore-profile   # opt out of profile AND voice for one run
 
 # Feedback on a reply (stored locally as JSONL)
 charla feedback useful --text "Sounds good!" --source imessage --target 42

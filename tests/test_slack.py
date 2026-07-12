@@ -12,6 +12,8 @@ from ai_reply_copilot.slack import (
     get_conversation_context,
     get_thread_context,
     list_conversations,
+    posting_client,
+    read_client,
     slack_ts_to_datetime,
 )
 
@@ -140,3 +142,35 @@ def test_send_slack_without_thread_omits_thread_ts(fake_slack):
     send_slack(fake_slack, "C1", "hi")
     _, payload = fake_slack.posted[-1]
     assert "thread_ts" not in payload
+
+
+# --- "post as you", never as the bot -------------------------------------------
+
+
+def test_posting_client_refuses_to_fall_back_to_the_bot_token(monkeypatch):
+    # Regression: posting used to silently degrade to SLACK_BOT_TOKEN when the
+    # user token was missing, so replies went out as the bot, not as you.
+    monkeypatch.delenv("SLACK_USER_TOKEN", raising=False)
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-bot")
+    with pytest.raises(SlackError, match="SLACK_USER_TOKEN"):
+        posting_client()
+
+
+def test_posting_client_uses_the_user_token(monkeypatch):
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-me")
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-bot")
+    assert posting_client().token == "xoxp-me"
+
+
+def test_explicit_none_token_does_not_silently_use_the_bot_token(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-bot")
+    with pytest.raises(SlackError, match="refusing to fall back"):
+        SlackClient(token=None, token_name="SLACK_USER_TOKEN")
+
+
+def test_read_client_prefers_the_user_token(monkeypatch):
+    monkeypatch.setenv("SLACK_BOT_TOKEN", "xoxb-bot")
+    monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-me")
+    assert read_client().token == "xoxp-me"
+    monkeypatch.delenv("SLACK_USER_TOKEN")
+    assert read_client().token == "xoxb-bot"

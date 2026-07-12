@@ -38,12 +38,27 @@ def test_build_system_prompt_mentions_count():
     assert "JSON" in prompt
 
 
+def test_build_system_prompt_shows_a_valid_json_example():
+    # The schema example must be real JSON. It once carried doubled braces
+    # ({{...}}) because the literal was not an f-string, which showed the model
+    # a malformed template — Anthropic has no json_object mode to paper over it.
+    prompt = build_system_prompt(num_candidates=2)
+    assert "{{" not in prompt and "}}" not in prompt
+    start = prompt.index('{"understanding"')
+    example = prompt[start : prompt.index("\n", start)]
+    schema = json.loads(example)
+    assert set(schema) == {"understanding", "open_points", "candidates"}
+    assert len(schema["candidates"]) == 2
+
+
 def test_build_system_prompt_language_rules():
     prompt = build_system_prompt()
-    assert "same language as the conversation" in prompt
     assert "translationese" in prompt
-    assert "overrides" in prompt  # style profile language wins
     assert "idiomatic" in prompt
+    # The resolved "Reply language" line is authoritative; the profile no longer
+    # overrides the conversation (an English channel must stay English).
+    assert "'Reply language' line in the user message is authoritative" in prompt
+    assert "mirror the conversation" in prompt
 
 
 def test_build_user_prompt_includes_intent_tone_draft():
@@ -51,14 +66,21 @@ def test_build_user_prompt_includes_intent_tone_draft():
         context="[..] boss: hi",
         intent="decline",
         tone="professional",
-        style=StyleProfile(use_emoji=False, language="English"),
+        style=StyleProfile(use_emoji=False),
         draft="I can't make it",
+        language="English",
     )
     assert "decline" in prompt
     assert "professional" in prompt
     assert "no emoji" in prompt
-    assert "English" in prompt
+    assert "Reply language: English" in prompt
     assert "I can't make it" in prompt
+
+
+def test_build_user_prompt_omits_reply_language_when_unresolved():
+    # No signal at all -> say nothing, and let the model mirror the conversation.
+    prompt = build_user_prompt(context="[..] boss: hi")
+    assert "Reply language:" not in prompt
 
 
 def test_build_user_prompt_defaults_without_options():

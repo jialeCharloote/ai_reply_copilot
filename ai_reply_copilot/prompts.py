@@ -7,6 +7,7 @@ sound like the user, respecting the chosen intent, tone, and personal style.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -53,12 +54,27 @@ class StyleProfile:
             parts.append("uses emoji" if self.use_emoji else "no emoji")
         if self.concise:
             parts.append("prefers concise messages")
-        if self.language:
-            parts.append(f"reply language: {self.language}")
+        # ``language`` is deliberately NOT described here. It is resolved per
+        # conversation (see language.resolve_language) and passed as an explicit
+        # "Reply language" line; emitting it here too would give the model two
+        # competing instructions when the profile disagrees with the thread.
         return "; ".join(parts)
 
 
 def build_system_prompt(num_candidates: int = 3) -> str:
+    # A literally valid JSON example, sized to the request. Showing the model a
+    # malformed template (e.g. an ellipsis, or doubled braces) costs reliability
+    # on providers that have no server-side JSON mode.
+    example = json.dumps(
+        {
+            "understanding": "<one sentence describing what is happening in the conversation>",
+            "open_points": [
+                "<something they asked or are waiting on that the user has not answered yet>"
+            ],
+            "candidates": [f"<reply {i}>" for i in range(1, num_candidates + 1)],
+        },
+        ensure_ascii=False,
+    )
     return (
         "You are Charla, a Mac assistant that drafts replies in the "
         "user's own voice for their current iMessage/Slack conversation. The "
@@ -72,20 +88,26 @@ def build_system_prompt(num_candidates: int = 3) -> str:
         "- For conflict, de-escalate, clarify, and suggest a next step.\n"
         "- Never produce harassment, threats, manipulation, impersonation, or "
         "scam content. For legal/medical/financial topics, be cautious.\n\n"
+        "'open_points' is what the user still owes the other side: questions "
+        "they were asked but have not answered, decisions being waited on, and "
+        "any deadline that was named. Read the whole thread — a question asked "
+        "early and never answered still counts. Quote concrete details (dates, "
+        "names, numbers) rather than paraphrasing vaguely. Return an empty list "
+        "if the user owes them nothing.\n\n"
         "Language rules:\n"
-        "- Reply in the same language as the conversation, judged by the most "
-        "recent messages. If the conversation mixes Chinese and English, mix "
-        "them the same natural way the user does.\n"
-        "- If the user's personal style sets a reply language, that overrides "
-        "the conversation language.\n"
-        "- Chinese replies must sound like a native speaker texting: natural "
-        "and colloquial, no translationese (翻译腔), and not overly formal or "
+        "- A 'Reply language' line in the user message is authoritative: write "
+        "the candidates AND the understanding AND the open_points in it.\n"
+        "- 中英混合 means genuine code-switching: mix the two the same natural "
+        "way the people in this conversation already do.\n"
+        "- If no reply language is given, mirror the conversation, judged by the "
+        "most recent messages.\n"
+        "- Chinese must sound like a native speaker texting: natural and "
+        "colloquial, no translationese (翻译腔), and not overly formal or "
         "official (避免公文腔) unless the tone calls for it.\n"
-        "- English replies must be idiomatic and conversational, not stiff or "
+        "- English must be idiomatic and conversational, not stiff or "
         "textbook-like.\n\n"
-        f"Return ONLY a JSON object with exactly these keys:\n"
-        '{{"understanding": "<one sentence describing what is happening in the '
-        'conversation>", "candidates": ["<reply 1>", ...]}}\n'
+        "Return ONLY a JSON object with exactly these keys:\n"
+        f"{example}\n"
         f"Provide exactly {num_candidates} candidates that are meaningfully "
         "different from each other."
     )
@@ -97,8 +119,20 @@ def build_user_prompt(
     tone: Optional[str] = None,
     style: Optional[StyleProfile] = None,
     draft: Optional[str] = None,
+    language: Optional[str] = None,
+    voice: Optional[str] = None,
 ) -> str:
-    lines = ["Here is the recent conversation (oldest to newest):", "", context, ""]
+    lines = []
+    if voice:
+        # First, and before the conversation: the model should know whose voice
+        # it is writing in before it reads what it is replying to. Verbatim
+        # examples of the user's own messages do most of the work here.
+        lines.extend([voice, ""])
+
+    lines.extend(["Here is the recent conversation (oldest to newest):", "", context, ""])
+
+    if language:
+        lines.append(f"Reply language: {language}")
 
     if intent:
         desc = INTENTS.get(intent, intent)

@@ -124,3 +124,19 @@ def test_get_chat_send_target_missing(chat_db):
 def test_missing_db_raises(tmp_path):
     with pytest.raises(ChatDatabaseError):
         list_conversations(db_path=tmp_path / "nope.db")
+
+
+def test_a_non_chat_db_raises_a_clean_error_not_a_traceback(tmp_path):
+    # _connect only guarded *opening* the file, so a valid SQLite file that is
+    # not a chat.db used to raise a raw sqlite3.OperationalError from inside the
+    # reader and escape cli.main's handlers as a traceback.
+    import sqlite3
+
+    other = tmp_path / "not_chat.db"
+    conn = sqlite3.connect(other)
+    conn.execute("CREATE TABLE unrelated (x INTEGER)")
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(ChatDatabaseError, match="no such table"):
+        list_conversations(db_path=other)

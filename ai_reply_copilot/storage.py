@@ -9,14 +9,20 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import asdict, fields
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from .prompts import StyleProfile
 
+if TYPE_CHECKING:  # pragma: no cover
+    from .voice import VoiceProfile
+
 PROFILE_FILENAME = "profile.json"
 FEEDBACK_FILENAME = "feedback.jsonl"
+CONVERSATIONS_FILENAME = "conversations.json"
+VOICE_FILENAME = "voice.json"
 
 # Feedback ratings mirror the PRD's feedback buttons.
 FEEDBACK_RATINGS = ("useful", "too_ai", "wrong_tone", "not_safe", "not_like_me")
@@ -68,6 +74,122 @@ def save_style_profile(profile: StyleProfile) -> Path:
     }
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     return path
+
+
+def conversations_path() -> Path:
+    return config_dir() / CONVERSATIONS_FILENAME
+
+
+def _conversation_key(source: str, target: str) -> str:
+    return f"{source}:{target}"
+
+
+class ConversationStoreError(RuntimeError):
+    """The conversation store exists but could not be read."""
+
+
+def _load_conversations(*, strict: bool = False) -> dict:
+    """Load the per-conversation preferences.
+
+    ``strict`` is for the write path: an unreadable file must NOT be treated as
+    an empty one there, because the writer would then overwrite it and destroy
+    every other conversation's settings. Readers stay lenient — a broken file
+    should degrade to "no preferences", not crash a draft.
+    """
+    path = conversations_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        if strict:
+            raise ConversationStoreError(
+                f"{path} is unreadable ({exc}). Refusing to overwrite it and lose "
+                "your other saved conversations — fix or delete the file."
+            ) from exc
+        return {}
+    if not isinstance(data, dict):
+        if strict:
+            raise ConversationStoreError(f"{path} is not a JSON object; refusing to overwrite it.")
+        return {}
+    return data
+
+
+def _entry(data: dict, key: str) -> dict:
+    """The entry for one conversation, tolerating a non-dict value on disk."""
+    entry = data.get(key)
+    return entry if isinstance(entry, dict) else {}
+
+
+def get_conversation_language(source: str, target: str) -> Optional[str]:
+    """The language locked to this conversation, if any."""
+    data = _load_conversations()
+    return _entry(data, _conversation_key(source, target)).get("language")
+
+
+def set_conversation_language(source: str, target: str, language: Optional[str]) -> Path:
+    """Lock (or, with ``language=None``, unlock) the reply language for one
+    conversation. Local-first, like everything else under the config dir."""
+    _ensure_dir()
+    data = _load_conversations(strict=True)
+    key = _conversation_key(source, target)
+    entry = _entry(data, key)
+    if language:
+        entry["language"] = language
+        data[key] = entry
+    else:
+        entry.pop("language", None)
+        if entry:
+            data[key] = entry
+        else:
+            data.pop(key, None)
+    path = conversations_path()
+    # Write atomically: a crash mid-write would otherwise truncate the file into
+    # exactly the corrupt state the strict load above exists to protect against.
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def voice_path() -> Path:
+    return config_dir() / VOICE_FILENAME
+
+
+def load_voice() -> Optional["VoiceProfile"]:
+    """The learned voice profile, if the user has run `charla voice learn`."""
+    from .voice import VoiceProfile
+
+    path = voice_path()
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    known = {f.name for f in fields(VoiceProfile)}
+    return VoiceProfile(**{k: v for k, v in data.items() if k in known})
+
+
+def save_voice(profile: "VoiceProfile") -> Path:
+    _ensure_dir()
+    path = voice_path()
+    payload = asdict(profile)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, path)
+    return path
+
+
+def forget_voice() -> bool:
+    """Delete the learned voice. Returns True if there was one."""
+    path = voice_path()
+    if not path.exists():
+        return False
+    path.unlink()
+    return True
 
 
 def record_feedback(

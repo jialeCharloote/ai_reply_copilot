@@ -125,6 +125,20 @@ def _connect(db_path: Path) -> sqlite3.Connection:
         ) from exc
 
 
+def _fetch(conn: sqlite3.Connection, query: str, params: tuple, *, one: bool = False):
+    """Run a read query, turning any SQLite failure into a ChatDatabaseError.
+
+    ``_connect`` only guards *opening* the file, so pointing ``--db`` at a SQLite
+    file that is not a chat.db used to surface a raw traceback ("no such table:
+    chat") from deep inside the reader.
+    """
+    try:
+        cursor = conn.execute(query, params)
+        return cursor.fetchone() if one else cursor.fetchall()
+    except sqlite3.DatabaseError as exc:
+        raise ChatDatabaseError(f"Could not read the Messages database: {exc}") from exc
+
+
 def list_conversations(
     db_path: Path = DEFAULT_CHAT_DB, limit: int = 20
 ) -> List[Conversation]:
@@ -151,7 +165,7 @@ def list_conversations(
     """
     conn = _connect(db_path)
     try:
-        rows = conn.execute(query, (limit,)).fetchall()
+        rows = _fetch(conn, query, (limit,))
     finally:
         conn.close()
 
@@ -189,7 +203,7 @@ def get_conversation_context(
     """
     conn = _connect(db_path)
     try:
-        rows = conn.execute(query, (chat_id, limit)).fetchall()
+        rows = _fetch(conn, query, (chat_id, limit))
     finally:
         conn.close()
 
@@ -210,15 +224,47 @@ def get_conversation_context(
     return messages
 
 
+def sample_sent_messages(
+    db_path: Path = DEFAULT_CHAT_DB, limit: int = 400
+) -> List[str]:
+    """The user's own recent messages, across every conversation.
+
+    This is the raw material for learning their voice (see ``voice.py``): they
+    have already written thousands of messages that sound exactly like them, so
+    there is no need to make them describe themselves in a questionnaire.
+    Read-only, and it never leaves the machine unless the user opts in.
+    """
+    query = """
+        SELECT m.text           AS text,
+               m.attributedBody AS attributed_body
+        FROM message m
+        WHERE m.is_from_me = 1
+        ORDER BY m.date DESC
+        LIMIT ?
+    """
+    conn = _connect(db_path)
+    try:
+        rows = _fetch(conn, query, (limit,))
+    finally:
+        conn.close()
+
+    texts = []
+    for row in rows:
+        text = _message_text(row["text"], row["attributed_body"])
+        if text:
+            texts.append(text)
+    return texts
+
+
 def get_chat_identifier(
     chat_id: int, db_path: Path = DEFAULT_CHAT_DB
 ) -> Optional[str]:
     """Return the chat_identifier (phone/email for 1:1 chats) for a chat id."""
     conn = _connect(db_path)
     try:
-        row = conn.execute(
-            "SELECT chat_identifier FROM chat WHERE ROWID = ?", (chat_id,)
-        ).fetchone()
+        row = _fetch(
+            conn, "SELECT chat_identifier FROM chat WHERE ROWID = ?", (chat_id,), one=True
+        )
     finally:
         conn.close()
     return row["chat_identifier"] if row else None
@@ -250,10 +296,12 @@ def get_chat_send_target(
     """
     conn = _connect(db_path)
     try:
-        row = conn.execute(
+        row = _fetch(
+            conn,
             "SELECT guid, chat_identifier, style FROM chat WHERE ROWID = ?",
             (chat_id,),
-        ).fetchone()
+            one=True,
+        )
     finally:
         conn.close()
     if not row:

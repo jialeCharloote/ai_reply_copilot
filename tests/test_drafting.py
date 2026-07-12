@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from ai_reply_copilot.drafting import (
+    SensitiveContentError,
     draft_from_context,
     draft_replies,
     load_context,
@@ -62,7 +65,10 @@ def test_draft_from_context_passes_style_through():
     assert suggestion.candidates == ["Yes!", "Sure", "On it"]
     # The style profile reached the model's user prompt.
     _system, user = fake.calls[-1]
-    assert "中英双语" in user
+    # Style still reaches the prompt, but the language does not ride along on it:
+    # it is resolved per conversation and passed as an explicit "Reply language".
+    assert "formality: casual" in user
+    assert "no emoji" in user
 
 
 def test_draft_replies_end_to_end_with_fakes():
@@ -80,3 +86,39 @@ def test_draft_replies_end_to_end_with_fakes():
     assert len(result.candidates) == 3
     assert result.send_target.thread_ts == "1.0"
     assert result.sensitive_categories == []
+
+
+def test_draft_replies_refuses_sensitive_context_by_default():
+    # This convenience path cannot prompt anyone, so it must not quietly upload.
+    client = _client([{"ts": "1.0", "text": "my password is hunter2", "user": "U2"}])
+    llm = FakeClient(json.dumps({"understanding": "u", "candidates": ["a"]}))
+    with pytest.raises(SensitiveContentError, match="credentials"):
+        draft_replies(client, channel="C1", llm_client=llm)
+    assert llm.calls == []
+
+
+def test_draft_replies_proceeds_when_explicitly_allowed():
+    client = _client([{"ts": "1.0", "text": "my password is hunter2", "user": "U2"}])
+    llm = FakeClient(json.dumps({"understanding": "u", "candidates": ["a"]}))
+    result = draft_replies(client, channel="C1", llm_client=llm, allow_sensitive=True)
+    assert result.candidates == ["a"]
+    assert result.sensitive_categories == ["credentials"]
+
+
+def test_draft_replies_honours_a_language_locked_to_the_channel(tmp_path, monkeypatch):
+    # draft_replies used to drop the target, so a channel's locked language was
+    # silently ignored and the thread got re-detected on every run.
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path))
+    from ai_reply_copilot.storage import set_conversation_language
+
+    client = _client([{"ts": "1.0", "text": "Can you review the deck?", "user": "U2"}])
+    llm = FakeClient(json.dumps({"understanding": "u", "open_points": ["p"], "candidates": ["a"]}))
+
+    result = draft_replies(client, channel="C1", llm_client=llm)
+    assert "Reply language: English" in llm.calls[-1][1]  # detected
+    assert result.open_points == ["p"]
+
+    set_conversation_language("slack", "C1", "中文")
+    result = draft_replies(client, channel="C1", llm_client=llm)
+    assert "Reply language: 中文" in llm.calls[-1][1]
+    assert result.language == "中文"

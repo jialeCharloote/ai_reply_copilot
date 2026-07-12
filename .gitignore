@@ -1,4 +1,8 @@
 .DS_Store
+# Secrets: README tells you to `cp .env.example .env` and fill in live tokens.
+.env
+.env.*
+!.env.example
 __pycache__/
 *.pyc
 *.egg-info/

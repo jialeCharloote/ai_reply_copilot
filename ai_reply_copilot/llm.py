@@ -46,7 +46,9 @@ class OpenAIClient:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gpt-4o-mini",
+        # Tone and bilingual nuance are the product; a mini-tier model is the
+        # wrong default for the one thing Charla differentiates on.
+        model: str = "gpt-4o",
         base_url: str = "https://api.openai.com/v1",
         temperature: float = 0.8,
     ):
@@ -112,10 +114,13 @@ class AnthropicClient:
             raise LLMError(f"Unexpected Anthropic response: {resp}") from exc
 
 
-def get_client(provider: str = "openai", model: Optional[str] = None):
+DEFAULT_PROVIDER = "anthropic"
+
+
+def get_client(provider: str = DEFAULT_PROVIDER, model: Optional[str] = None):
     provider = provider.lower()
     if provider == "openai":
-        return OpenAIClient(model=model or "gpt-4o-mini")
+        return OpenAIClient(model=model or "gpt-4o")
     if provider == "anthropic":
         return AnthropicClient(model=model or "claude-opus-4-8")
     raise LLMError(f"Unknown provider: {provider!r} (use 'openai' or 'anthropic').")

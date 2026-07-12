@@ -18,10 +18,17 @@ from typing import List, Optional
 
 from . import slack as slack_reader
 from .generate import ReplySuggestion, generate_replies
-from .llm import get_client
+from .language import resolve_language
+from .llm import DEFAULT_PROVIDER, get_client
 from .models import Message, render_context
 from .prompts import StyleProfile
-from .safety import scan_sensitive
+from .safety import describe_warning, scan_blocking, scan_notice
+from .storage import get_conversation_language, load_voice
+from .voice import describe_for_prompt
+
+
+class SensitiveContentError(RuntimeError):
+    """Raised when context would reach a cloud model without an explicit OK."""
 
 
 @dataclass
@@ -37,8 +44,13 @@ class ConversationContext:
     """Read-only context for a target message, before any cloud call."""
 
     messages: List[Message]
+    # Everything found, for display. ``blocking_categories`` is the subset that
+    # must actually stop and ask (an actual secret); the rest are topics worth
+    # mentioning but not worth interrupting for.
     sensitive_categories: List[str]
     send_target: SendTarget
+    blocking_categories: List[str] = field(default_factory=list)
+    notice_categories: List[str] = field(default_factory=list)
 
 
 @dataclass
@@ -50,6 +62,8 @@ class DraftResult:
     sensitive_categories: List[str]
     send_target: SendTarget
     context: List[Message] = field(default_factory=list)
+    open_points: List[str] = field(default_factory=list)
+    language: Optional[str] = None
 
 
 def load_context(
@@ -74,11 +88,15 @@ def load_context(
         messages = slack_reader.get_conversation_context(
             read_client, channel, limit=limit
         )
-    sensitive = scan_sensitive(render_context(messages)) if messages else []
+    rendered = render_context(messages) if messages else ""
+    blocking = scan_blocking(rendered) if rendered else []
+    notices = [c for c in scan_notice(rendered) if c not in blocking] if rendered else []
     reply_thread = thread_ts or message_ts
     return ConversationContext(
         messages=messages,
-        sensitive_categories=sensitive,
+        sensitive_categories=blocking + notices,
+        blocking_categories=blocking,
+        notice_categories=notices,
         send_target=SendTarget(channel=channel, thread_ts=reply_thread),
     )
 
@@ -91,8 +109,21 @@ def draft_from_context(
     intent: Optional[str] = None,
     tone: Optional[str] = None,
     num: int = 3,
+    source: str = "slack",
+    target: Optional[str] = None,
 ) -> ReplySuggestion:
-    """Turn already-read context into an understanding + reply candidates."""
+    """Turn already-read context into an understanding + reply candidates.
+
+    The reply language is resolved per conversation here, so every front-end gets
+    the same behaviour: an English channel is answered in English even if the
+    style profile says 中文 (the profile is only a fallback).
+    """
+    locked = get_conversation_language(source, target) if target else None
+    language, _reason = resolve_language(
+        messages,
+        locked=locked,
+        profile_language=style.language if style else None,
+    )
     return generate_replies(
         messages,
         client,
@@ -100,6 +131,8 @@ def draft_from_context(
         tone=tone,
         style=style,
         num_candidates=num,
+        language=language,
+        voice=describe_for_prompt(load_voice()),
     )
 
 
@@ -113,16 +146,19 @@ def draft_replies(
     intent: Optional[str] = None,
     tone: Optional[str] = None,
     num: int = 3,
-    provider: str = "anthropic",
+    provider: str = DEFAULT_PROVIDER,
     model: Optional[str] = None,
     limit: int = 20,
     llm_client=None,
+    allow_sensitive: bool = False,
 ) -> DraftResult:
-    """Convenience: read context and draft in one call (skips the gate).
+    """Convenience: read context and draft in one call.
 
-    Front-ends that honour the sensitive-content gate should call
-    ``load_context`` then ``draft_from_context`` instead. ``llm_client`` is
-    injectable for tests/offline demos.
+    This still honours the P0 sensitive-content gate — it just cannot *ask*, so
+    it refuses by default and the caller must opt in with ``allow_sensitive``.
+    A front-end that wants to prompt the user should call ``load_context``,
+    inspect ``sensitive_categories``, then call ``draft_from_context``.
+    ``llm_client`` is injectable for tests/offline demos.
     """
     context = load_context(
         read_client,
@@ -131,13 +167,31 @@ def draft_replies(
         thread_ts=thread_ts,
         limit=limit,
     )
+    # Only an actual secret refuses. A sensitive *topic* (salary, offer, contract)
+    # is reported on the result and waved through — see safety.py.
+    if context.blocking_categories and not allow_sensitive:
+        raise SensitiveContentError(
+            describe_warning(context.blocking_categories)
+            + " Pass allow_sensitive=True to proceed, or gate it via load_context()."
+        )
     client = llm_client or get_client(provider=provider, model=model)
     suggestion = draft_from_context(
-        context.messages, client=client, style=style, intent=intent, tone=tone, num=num
+        context.messages,
+        client=client,
+        style=style,
+        intent=intent,
+        tone=tone,
+        num=num,
+        # Without the target, a language locked to this channel is silently
+        # ignored and the thread gets re-detected every time.
+        source="slack",
+        target=channel,
     )
     return DraftResult(
         understanding=suggestion.understanding,
         candidates=suggestion.candidates,
+        open_points=suggestion.open_points,
+        language=suggestion.language,
         sensitive_categories=context.sensitive_categories,
         send_target=context.send_target,
         context=context.messages,

@@ -37,6 +37,8 @@ def run_reply_flow(
     num: int = 3,
     dry_run: bool = False,
     auto_yes: bool = False,
+    language: Optional[str] = None,
+    voice: Optional[str] = None,
     prompt: Optional[Callable[[str], str]] = None,
     output: Optional[Callable[[str], None]] = None,
 ) -> Optional[SendResult]:
@@ -53,10 +55,17 @@ def run_reply_flow(
         style=style,
         draft=draft,
         num_candidates=num,
+        language=language,
+        voice=voice,
     )
 
     if suggestion.understanding:
-        output(f"Understanding: {suggestion.understanding}\n")
+        output(f"Understanding: {suggestion.understanding}")
+    if suggestion.open_points:
+        output("\n你还没回应 / Waiting on you:")
+        for point in suggestion.open_points:
+            output(f"  • {point}")
+    output("")
     for index, candidate in enumerate(suggestion.candidates, start=1):
         output(f"{index}. {candidate}")
 

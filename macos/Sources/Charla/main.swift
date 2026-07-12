@@ -14,9 +14,36 @@ struct Suggestion: Decodable {
     let understanding: String
     let candidates: [String]
     let sensitive: [String]
+    /// What the user still owes the other side: unanswered questions, decisions
+    /// being waited on, deadlines. Written in the reply language.
+    let openPoints: [String]
+    /// The reply language Charla resolved for this conversation.
+    let language: String?
+
+    enum CodingKeys: String, CodingKey {
+        case understanding, candidates, sensitive, language
+        case openPoints = "open_points"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        understanding = try c.decodeIfPresent(String.self, forKey: .understanding) ?? ""
+        candidates = try c.decodeIfPresent([String].self, forKey: .candidates) ?? []
+        sensitive = try c.decodeIfPresent([String].self, forKey: .sensitive) ?? []
+        openPoints = try c.decodeIfPresent([String].self, forKey: .openPoints) ?? []
+        language = try c.decodeIfPresent(String.self, forKey: .language)
+    }
 }
 
-enum DraftError: Error { case commandFailed(String) }
+enum DraftError: Error {
+    case commandFailed(String)
+    /// The CLI refused to send sensitive context to the cloud (exit 3). The user
+    /// must confirm; we surface a "Draft anyway" item rather than a dead error.
+    case needsSensitiveConsent(categories: String)
+}
+
+/// `cli.EXIT_SENSITIVE` — the gate refused, awaiting explicit consent.
+private let exitSensitive: Int32 = 3
 
 /// Run the `charla` CLI (found on PATH via /usr/bin/env) and decode its JSON.
 func fetchSuggestion(extraArgs: [String]) -> Result<Suggestion, DraftError> {
@@ -34,17 +61,35 @@ func fetchSuggestion(extraArgs: [String]) -> Result<Suggestion, DraftError> {
     } catch {
         return .failure(.commandFailed("Couldn't launch `charla`: \(error.localizedDescription)"))
     }
+
+    // Drain both pipes concurrently, then wait. Reading one to EOF before the
+    // other deadlocks if the child fills the ~64KB buffer of the pipe we are not
+    // reading — and stdout/stderr are both chatty (chatter is on stderr).
+    var outData = Data()
+    var errData = Data()
+    let group = DispatchGroup()
+    let queue = DispatchQueue.global(qos: .userInitiated)
+    queue.async(group: group) { outData = stdout.fileHandleForReading.readDataToEndOfFile() }
+    queue.async(group: group) { errData = stderr.fileHandleForReading.readDataToEndOfFile() }
+    group.wait()
     process.waitUntilExit()
 
-    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+    let err = String(data: errData, encoding: .utf8)?
+        .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+    if process.terminationStatus == exitSensitive {
+        return .failure(.needsSensitiveConsent(categories: err))
+    }
     if process.terminationStatus != 0 {
-        let err = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         return .failure(.commandFailed(err.isEmpty ? "charla exited \(process.terminationStatus)" : err))
     }
     do {
         return .success(try JSONDecoder().decode(Suggestion.self, from: outData))
     } catch {
-        return .failure(.commandFailed("Couldn't parse drafts: \(error.localizedDescription)"))
+        // stdout is the machine-readable channel; anything unparseable there is a
+        // bug worth showing rather than swallowing behind a generic message.
+        let raw = String(data: outData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return .failure(.commandFailed("Couldn't parse drafts: \(error.localizedDescription)\n\(raw.prefix(200))"))
     }
 }
 
@@ -89,6 +134,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             note.isEnabled = false
             menu.addItem(note)
         }
+        // What you still owe them — the reason to open this menu at all.
+        if !suggestion.openPoints.isEmpty {
+            menu.addItem(.separator())
+            let title = NSMenuItem(title: "你还没回应 / Waiting on you:", action: nil, keyEquivalent: "")
+            title.isEnabled = false
+            menu.addItem(title)
+            for point in suggestion.openPoints {
+                let item = NSMenuItem(title: "   • \(point)", action: nil, keyEquivalent: "")
+                item.isEnabled = false
+                menu.addItem(item)
+            }
+        }
+        if let language = suggestion.language {
+            let item = NSMenuItem(title: "Reply language: \(language)", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
         menu.addItem(.separator())
         for (index, candidate) in suggestion.candidates.enumerated() {
             let item = makeItem("\(index + 1). \(candidate)", #selector(copyDraft(_:)))
@@ -101,6 +163,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = menu
         statusItem.button?.performClick(nil)  // reopen so the drafts are visible immediately
     }
+
+    /// Shown when the CLI refuses to upload sensitive context (exit 3). Nothing
+    /// has left the machine yet; continuing is an explicit, per-run choice.
+    private func showSensitiveGate(_ detail: String) {
+        let menu = NSMenu()
+        for line in detail.split(separator: "\n").prefix(3) {
+            let item = NSMenuItem(title: String(line), action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        menu.addItem(makeItem("Draft anyway (sends context to the cloud)", #selector(draftAnyway)))
+        menu.addItem(makeItem("Cancel", #selector(showIdleMenuAction)))
+        menu.addItem(makeItem("Quit Charla", #selector(quit)))
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+    }
+
+    @objc private func showIdleMenuAction() { showIdleMenu() }
 
     private func showError(_ message: String) {
         let menu = NSMenu()
@@ -116,13 +197,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: actions
 
     @objc private func draftMostRecent() {
+        draft(allowSensitive: false)
+    }
+
+    /// The user saw what the scanner found and chose to continue anyway. This is
+    /// the app's half of the sensitive-content gate: the CLI refuses by default,
+    /// and only an explicit click here passes --allow-sensitive.
+    @objc private func draftAnyway() {
+        draft(allowSensitive: true)
+    }
+
+    private func draft(allowSensitive: Bool) {
         showLoadingMenu()
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = fetchSuggestion(extraArgs: [])
+            let result = fetchSuggestion(extraArgs: allowSensitive ? ["--allow-sensitive"] : [])
             DispatchQueue.main.async {
                 switch result {
                 case .success(let suggestion): self.showDrafts(suggestion)
                 case .failure(.commandFailed(let message)): self.showError(message)
+                case .failure(.needsSensitiveConsent(let categories)):
+                    self.showSensitiveGate(categories)
                 }
             }
         }
