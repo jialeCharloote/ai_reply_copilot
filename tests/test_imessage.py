@@ -117,6 +117,23 @@ def test_get_chat_send_target_group(chat_db):
     assert target.guid == "iMessage;+;chat9999"
 
 
+def test_get_chat_send_target_carries_the_sms_service(chat_db):
+    """An SMS chat must not be addressed on the iMessage service.
+
+    `service_name` sits in the same row as `style`, but only `style` was ever
+    read — so every green-bubble chat was sent as iMessage and failed, after the
+    model had already been billed.
+    """
+    target = get_chat_send_target(40, db_path=chat_db)
+    assert target is not None
+    assert target.is_group is False
+    assert target.service == "SMS"
+
+
+def test_get_chat_send_target_imessage_service(chat_db):
+    assert get_chat_send_target(10, db_path=chat_db).service == "iMessage"
+
+
 def test_get_chat_send_target_missing(chat_db):
     assert get_chat_send_target(999, db_path=chat_db) is None
 

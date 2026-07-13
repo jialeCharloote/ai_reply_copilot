@@ -198,6 +198,47 @@ def test_a_credential_word_carrying_a_value_still_blocks():
         assert "credentials" in scan_blocking(text), text
 
 
+def test_an_alphabetic_password_blocks():
+    """The hole the digit/symbol rule left wide open.
+
+    Requiring a secret value to carry a digit or a symbol meant every purely
+    alphabetic password walked straight through the one hard gate in the product
+    — and diceware passphrases, wifi codes and door codes are the secrets people
+    actually share over iMessage and Slack. `voice.py` even uses `sunshinecoast`
+    as its canonical example of a secret, while the live-context gate ignored it.
+    """
+    for text in (
+        "the wifi password is correcthorsebattery",
+        "password: bluemountain",
+        "my password is opensesame",
+        "passcode: bluemoon",
+        "wifi 密码是 sunshinecoast",
+        "门禁密码是 sunshinecoast",
+        "the passphrase is purple giraffe",
+    ):
+        assert "credentials" in scan_blocking(text), text
+
+
+def test_predicates_after_a_credential_word_still_do_not_block():
+    """The other half of the same rule: over-blocking is how a gate gets ignored.
+
+    Closing the alphabetic hole must not turn every "the wifi is slow" into a
+    hard stop — a gate that trips on ordinary work talk trains the user to click
+    through it, and then it protects nothing.
+    """
+    for text in (
+        "credentials are stored in 1Password",
+        "the api key is missing from the config",
+        "2fa is required for the admin panel",
+        "wifi is down again",
+        "the pin is not working",
+        "my password is wrong",
+        "the token is expired",
+        "the login is broken",
+    ):
+        assert scan_blocking(text) == [], text
+
+
 def test_offer_is_matched_as_a_word_not_a_substring():
     # "offer" sat in the CJK list, which matches case-sensitive substrings: it
     # missed "Offer accepted!" and fired inside unrelated uses of the verb.

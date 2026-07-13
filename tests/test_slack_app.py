@@ -21,11 +21,13 @@ from ai_reply_copilot.slack_app import (
     EDIT_BLOCK,
     SEND_VIEW_CALLBACK,
     confirm_view,
+    drafts_expired,
     drafts_view,
     dumps_meta,
     loads_meta,
     loading_view,
     message_view,
+    picked_a_draft,
     reply_thread_ts,
     selected_text,
 )
@@ -298,3 +300,42 @@ def test_drafts_view_truncates_a_runaway_understanding():
     for block in view["blocks"]:
         if block["type"] == "section":
             assert len(block["text"]["text"]) <= slack_app.SECTION_TEXT_LIMIT
+
+
+# --- an evicted draft must not become "pick a draft" --------------------------
+#
+# drafts_by_view is bounded (MAX_OPEN_MODALS) and is never popped when a modal is
+# closed unsubmitted, so an older open modal's candidates can be evicted out from
+# under it — and a restart drops them all. The submit handler could then only tell
+# a user who *had* picked a draft to "Pick a draft", and re-picking would never
+# work, because it resolves against the same empty list.
+
+
+def _submitted(choice=None, edit=None):
+    values = {}
+    if choice is not None:
+        values[CHOICE_BLOCK] = {CHOICE_ACTION: {"selected_option": {"value": choice}}}
+    if edit is not None:
+        values[EDIT_BLOCK] = {EDIT_ACTION: {"value": edit}}
+    return values
+
+
+def test_a_picked_draft_whose_candidates_are_gone_is_reported_as_expired():
+    assert drafts_expired(_submitted(choice="1"), []) is True
+
+
+def test_a_live_pick_is_not_expired():
+    assert drafts_expired(_submitted(choice="1"), ["a", "b"]) is False
+
+
+def test_picking_nothing_is_not_expiry_but_an_empty_submit():
+    # No radio selected and no text: that really is "pick a draft, or write one".
+    assert drafts_expired(_submitted(), []) is False
+    assert picked_a_draft(_submitted()) is False
+
+
+def test_a_typed_edit_still_sends_when_the_candidates_are_gone():
+    # The edit box holds the user's own words; losing the cache must not lose them.
+    assert selected_text(_submitted(choice="1", edit="I will be there at 7"), []) == (
+        "I will be there at 7"
+    )

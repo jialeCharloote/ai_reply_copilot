@@ -191,3 +191,45 @@ def test_a_non_dict_entry_does_not_crash(tmp_path, monkeypatch):
     assert get_conversation_language("slack", "C1") is None  # not an AttributeError
     set_conversation_language("slack", "C1", CHINESE)  # not a TypeError
     assert get_conversation_language("slack", "C1") == CHINESE
+
+
+# --- scripts Charla does not model ---------------------------------------------
+#
+# Unicode names kana and hangul HIRAGANA/KATAKANA/HANGUL — none of which contain
+# "CJK". So a kana character counted as neither CJK nor Latin and vanished from
+# the tally: a Japanese sentence was judged on its kanji alone, came back 100%
+# "CJK", and Charla confidently drafted a *Chinese* reply to it.
+
+
+def test_japanese_is_not_detected_as_chinese():
+    messages = _msgs(("お疲れ様です。明日の会議は10時からです。", False))
+    assert detect_language(messages) is None
+
+
+def test_korean_is_not_detected_as_chinese():
+    assert detect_language(_msgs(("안녕하세요, 내일 회의 가능하신가요?", False))) is None
+
+
+def test_the_profile_does_not_impose_chinese_on_a_japanese_thread():
+    """The fallback is the dangerous part: a profile saying 中文 would answer a
+    Japanese message in Chinese, which is worse than saying nothing at all."""
+    messages = _msgs(("お疲れ様です。明日の会議は10時からです。", False))
+    language, reason = resolve_language(messages, profile_language="中文")
+    assert language is None
+    assert "mirror" in reason
+
+
+def test_an_explicit_language_still_wins_on_a_japanese_thread():
+    # The user asked for it by name; that is always authoritative.
+    messages = _msgs(("お疲れ様です。", False))
+    assert resolve_language(messages, explicit="English")[0] == "English"
+
+
+def test_a_stray_kana_does_not_derail_an_english_thread():
+    # One ツ in an English sentence is not a Japanese conversation.
+    assert detect_language(_msgs(("shipping it now ツ looks good to me", False))) == ENGLISH
+
+
+def test_chinese_and_english_detection_still_work():
+    assert detect_language(_msgs(("这个 API 什么时候 deploy?", False))) == CHINESE
+    assert detect_language(_msgs(("Can you review the deck before EOD?", False))) == ENGLISH

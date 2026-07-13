@@ -32,7 +32,7 @@ from .imessage import (
 )
 from .language import LANGUAGES, resolve_language
 from .llm import DEFAULT_PROVIDER, LLMError, get_client
-from .models import unanswered_index
+from .models import to_local, unanswered_index
 from .prompts import INTENTS, TONES, StyleProfile
 from .safety import describe_notice, describe_warning, scan_blocking, scan_notice
 from .send import SendError, send_imessage, send_imessage_to_chat, send_slack
@@ -188,6 +188,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_send.add_argument("--text", required=True, help="The message text to send")
     p_send.add_argument(
+        "--service",
+        choices=["imessage", "sms"],
+        default="imessage",
+        help="iMessage service to send on. A green-bubble contact needs --service sms "
+        "(`charla reply` picks this up from the chat automatically).",
+    )
+    p_send.add_argument(
         "--dry-run", action="store_true", help="Preview without sending"
     )
     p_send.add_argument(
@@ -285,11 +292,8 @@ def _cmd_list(args: argparse.Namespace) -> int:
         print("No conversations found.")
         return 0
     for convo in conversations:
-        when = (
-            convo.last_message_at.strftime("%Y-%m-%d %H:%M")
-            if convo.last_message_at
-            else "?"
-        )
+        local = to_local(convo.last_message_at)
+        when = local.strftime("%Y-%m-%d %H:%M") if local else "?"
         preview = convo.last_text.replace("\n", " ")
         if len(preview) > 60:
             preview = preview[:57] + "..."
@@ -317,11 +321,8 @@ def _cmd_slack_list(args: argparse.Namespace) -> int:
         print("No Slack conversations found.")
         return 0
     for convo in conversations:
-        when = (
-            convo.last_message_at.strftime("%Y-%m-%d %H:%M")
-            if convo.last_message_at
-            else "?"
-        )
+        local = to_local(convo.last_message_at)
+        when = local.strftime("%Y-%m-%d %H:%M") if local else "?"
         preview = convo.last_text
         if len(preview) > 60:
             preview = preview[:57] + "..."
@@ -555,7 +556,9 @@ def _cmd_send(args: argparse.Namespace) -> int:
         client = None if args.dry_run else posting_client()
         result = send_slack(client, args.to, args.text, dry_run=args.dry_run)
     else:
-        result = send_imessage(args.to, args.text, dry_run=args.dry_run)
+        result = send_imessage(
+            args.to, args.text, service=args.service, dry_run=args.dry_run
+        )
 
     print(result.detail)
     return 0
@@ -593,8 +596,12 @@ def _cmd_reply(args: argparse.Namespace) -> int:
             def send_fn(text: str, dry_run: bool):
                 return send_imessage_to_chat(chat.guid, text, dry_run=dry_run)
         else:
+            # Send on the chat's own service. Half a typical chat.db is SMS, and
+            # an SMS handle has no iMessage account to be a participant of.
             def send_fn(text: str, dry_run: bool):
-                return send_imessage(chat.recipient, text, dry_run=dry_run)
+                return send_imessage(
+                    chat.recipient, text, service=chat.service, dry_run=dry_run
+                )
 
     if not messages:
         _note(f"No messages found for {args.source} target {target}.")

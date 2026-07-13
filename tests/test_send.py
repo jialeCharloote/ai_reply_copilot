@@ -38,7 +38,29 @@ def test_send_imessage_invokes_runner():
     assert result.dry_run is False
     assert len(calls) == 1
     assert 'send "hello"' in calls[0]
-    assert result.detail == "sent via Messages"
+    assert result.detail == "sent via Messages (iMessage)"
+    assert "service type = iMessage" in calls[0]
+
+
+def test_send_imessage_on_sms_addresses_the_sms_service():
+    """A green-bubble contact has no iMessage account to be a participant of.
+
+    Roughly half of a real chat.db is SMS, and every one of those sends used to
+    be built against `service type = iMessage`.
+    """
+    calls = []
+    result = send_imessage(
+        "+1555", "hello", service="SMS", runner=lambda s: calls.append(s) or ""
+    )
+    assert "service type = SMS" in calls[0]
+    assert "service type = iMessage" not in calls[0]
+    assert result.detail == "sent via Messages (SMS)"
+
+
+def test_unknown_service_falls_back_to_imessage():
+    calls = []
+    send_imessage("+1555", "hi", service="", runner=lambda s: calls.append(s) or "")
+    assert "service type = iMessage" in calls[0]
 
 
 def test_send_imessage_empty_raises():

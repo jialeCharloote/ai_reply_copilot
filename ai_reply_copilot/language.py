@@ -39,19 +39,39 @@ _MIXED_MIN_SHARE = 0.08
 _RECENT_WINDOW = 6
 
 
+# Share of a thread's script that must be kana/hangul before we admit we cannot
+# read it. One 漢字-adjacent character in an English sentence should not trigger it.
+_UNSUPPORTED_MIN_SHARE = 0.15
+
+
 def _is_cjk(char: str) -> bool:
     return "CJK" in unicodedata.name(char, "")
 
 
+def _is_unsupported_script(char: str) -> bool:
+    """Japanese kana or Korean hangul — scripts Charla does not model.
+
+    Unicode names these HIRAGANA/KATAKANA/HANGUL, none of which contain "CJK", so
+    a kana character counted as *neither* CJK nor Latin and simply vanished from
+    the tally. A Japanese sentence was therefore judged on its kanji alone and
+    came back 100% "CJK" — i.e. Chinese. Charla would then confidently draft a
+    Chinese reply to a Japanese message, with "自动检测 / detected" as its reason.
+    """
+    name = unicodedata.name(char, "")
+    return name.startswith(("HIRAGANA", "KATAKANA", "HANGUL"))
+
+
 def _script_counts(text: str) -> tuple:
-    """Return (cjk_chars, latin_letters) in ``text``."""
-    cjk = latin = 0
+    """Return (cjk_chars, latin_letters, unsupported_chars) in ``text``."""
+    cjk = latin = unsupported = 0
     for char in text:
         if char.isascii() and char.isalpha():
             latin += 1
+        elif _is_unsupported_script(char):
+            unsupported += 1
         elif _is_cjk(char):
             cjk += 1
-    return cjk, latin
+    return cjk, latin, unsupported
 
 
 def detect_language(messages: List[Message]) -> Optional[str]:
@@ -66,31 +86,51 @@ def detect_language(messages: List[Message]) -> Optional[str]:
         return None
 
     def counts(considered) -> tuple:
-        cjk = latin = 0
+        cjk = latin = unsupported = 0
         for message in considered:
-            message_cjk, message_latin = _script_counts(message.text)
+            message_cjk, message_latin, message_other = _script_counts(message.text)
             cjk += message_cjk
             latin += message_latin
-        return cjk, latin
+            unsupported += message_other
+        return cjk, latin, unsupported
 
     theirs = [m for m in recent if not m.is_from_me]
-    cjk, latin = counts(theirs or recent)
-    if cjk + latin == 0 and theirs:
+    cjk, latin, unsupported = counts(theirs or recent)
+    if cjk + latin + unsupported == 0 and theirs:
         # Their recent messages carry no script at all ("👍", a bare link). Fall
         # back to the whole window rather than conceding — the user's own lines
         # are still a strong signal for which language this thread is in.
-        cjk, latin = counts(recent)
+        cjk, latin, unsupported = counts(recent)
 
-    total = cjk + latin
+    total = cjk + latin + unsupported
     if total == 0:
         return None  # emoji/links/numbers only — no signal
 
-    share = cjk / total
+    if unsupported / total >= _UNSUPPORTED_MIN_SHARE:
+        # Japanese or Korean. Charla models Chinese and English; claiming one of
+        # them here would be worse than admitting we don't know, because the model
+        # mirrors the conversation perfectly well when we say nothing.
+        return None
+
+    share = cjk / (cjk + latin) if cjk + latin else 0.0
     if share >= _CHINESE_MIN_SHARE:
         return CHINESE
     if share >= _MIXED_MIN_SHARE:
         return MIXED
     return ENGLISH
+
+
+def is_unsupported_script(messages: List[Message]) -> bool:
+    """True when the thread is mostly a script Charla does not model (ja/ko)."""
+    recent = [m for m in messages if m.text.strip()][-_RECENT_WINDOW:]
+    cjk = latin = unsupported = 0
+    for message in recent:
+        message_cjk, message_latin, message_other = _script_counts(message.text)
+        cjk += message_cjk
+        latin += message_latin
+        unsupported += message_other
+    total = cjk + latin + unsupported
+    return bool(total) and unsupported / total >= _UNSUPPORTED_MIN_SHARE
 
 
 def resolve_language(
@@ -118,6 +158,11 @@ def resolve_language(
     detected = detect_language(messages)
     if detected:
         return detected, "自动检测 / detected"
+    if is_unsupported_script(messages):
+        # A Japanese or Korean thread. The profile fallback must not fire here:
+        # a profile saying 中文 would answer a Japanese message in Chinese, which
+        # is the worst of the available options. Let the model mirror instead.
+        return None, "跟随对话 / mirror the conversation"
     if profile_language:
         return profile_language, "个人设置兜底 / from your profile"
     return None, "跟随对话 / mirror the conversation"

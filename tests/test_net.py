@@ -116,16 +116,118 @@ def test_a_nonsense_retry_after_falls_back_to_backoff():
     assert sleeps == [net.BASE_DELAY]
 
 
-def test_retry_after_is_capped():
+def test_a_servers_retry_after_is_honoured_past_the_backoff_cap():
+    """MAX_DELAY bounds our *guess*; it must not override the server.
+
+    Slack answers a 429 with `Retry-After: 30` routinely. Capping that at 8s meant
+    every retry landed back inside the cooldown we had just been told to observe:
+    three attempts, three 429s, no progress, and extra load on Slack on the way.
+    """
+    _, sleeps = _run([_http_error(429, retry_after="30"), _Response({"ok": True})])
+    assert sleeps == [30.0]
+
+
+def test_an_absurd_retry_after_is_still_bounded():
     _, sleeps = _run([_http_error(429, retry_after="9999"), _Response({"ok": True})])
-    assert sleeps == [net.MAX_DELAY]
+    assert sleeps == [net.MAX_RETRY_AFTER]
+
+
+# --- non-idempotent requests: a send must never be replayed ----------------------
+#
+# The retry policy was written for reads and then quietly applied to
+# chat.postMessage. A 5xx or a dropped connection on a send is *ambiguous* —
+# Slack may have created the message and lost only the response — so retrying
+# posts the user's reply twice, as them, in front of their colleagues. There is
+# no idempotency key to make it safe.
+
+
+def _attempts(sequence, **kwargs):
+    """Drive request_json and count how many HTTP calls were actually made."""
+    calls = []
+    inner = _urlopen_returning(sequence)
+
+    def counting(request, timeout=None):
+        calls.append(request)
+        return inner(request, timeout=timeout)
+
+    with patch.object(net.urllib.request, "urlopen", counting):
+        try:
+            result = request_json(
+                "https://example.com",
+                headers={},
+                data=b"{}",
+                method="POST",
+                sleep=lambda _s: None,
+                **kwargs,
+            )
+        except HttpError as exc:
+            return None, len(calls), exc
+    return result, len(calls), None
+
+
+def test_a_non_idempotent_post_is_not_replayed_on_a_server_error():
+    result, attempts, error = _attempts(
+        [_http_error(503), _Response({"ok": True, "ts": "1.0"})], idempotent=False
+    )
+    assert attempts == 1, "the 503 was retried — the message may already have been sent"
+    assert result is None and error is not None
+
+
+def test_a_non_idempotent_post_is_not_replayed_on_a_dropped_connection():
+    # The most dangerous case of all: the request may have been delivered and
+    # only the response lost.
+    dropped = urllib.error.URLError("connection reset")
+    _, attempts, error = _attempts(
+        [dropped, _Response({"ok": True, "ts": "1.0"})], idempotent=False
+    )
+    assert attempts == 1
+    assert error is not None
+
+
+def test_a_non_idempotent_post_still_retries_a_rate_limit():
+    # A 429 means the server rejected the call outright, so nothing was created
+    # and there is nothing to duplicate.
+    result, attempts, error = _attempts(
+        [_http_error(429), _Response({"ok": True, "ts": "1.0"})], idempotent=False
+    )
+    assert attempts == 2
+    assert result == {"ok": True, "ts": "1.0"} and error is None
+
+
+def test_an_idempotent_request_still_retries_everything():
+    result, attempts, _ = _attempts(
+        [_http_error(503), _Response({"ok": True})], idempotent=True
+    )
+    assert attempts == 2 and result == {"ok": True}
+
+
+def test_post_message_does_not_replay_the_users_reply():
+    """The end-to-end guarantee, driven through the real SlackClient."""
+    client = SlackClient(token="xoxp-fake", sleep=lambda _s: None)
+    sent = []
+
+    def counting(request, timeout=None):
+        sent.append(request)
+        raise urllib.error.HTTPError(
+            "https://slack.com", 503, "err", {}, io.BytesIO(b"unavailable")
+        )
+
+    with patch.object(net.urllib.request, "urlopen", counting):
+        with pytest.raises(SlackError):
+            client.post_message("C1", "see you at 7!")
+    assert len(sent) == 1, "the reply was POSTed more than once"
 
 
 # --- the callers -----------------------------------------------------------------
 
 
 def test_the_llm_survives_a_rate_limit():
-    ok = {"content": [{"text": '{"understanding": "u", "candidates": ["a"]}'}]}
+    ok = {
+        "stop_reason": "end_turn",
+        "content": [
+            {"type": "text", "text": '{"understanding": "u", "candidates": ["a"]}'}
+        ],
+    }
     sequence = [_http_error(429, retry_after="1"), _http_error(529), _Response(ok)]
     with patch.object(net.urllib.request, "urlopen", _urlopen_returning(sequence)), \
             patch.object(net.time, "sleep", lambda _s: None):

@@ -37,10 +37,30 @@ NOTICE = "notice"
 # the bug: it hard-blocked "the wifi is slow" and "the token is expired".
 _SEPARATOR = r"(?:is|are|:|=|是|为)"
 
-# A value that looks like a secret: at least 4 characters, and containing a digit
-# or a symbol. Trailing sentence punctuation is excluded so "expired," does not
-# read as a symbol-bearing value. "slow" / "out" / "broken" never match.
-_SECRETISH = r"(?=[^\s,;.!?，。]*[\d!@#$%^&*_+=/~-])[^\s,;.!?，。]{4,}"
+# What follows a credential word is a *predicate* far more often than a secret:
+# "the wifi is slow", "the token is expired", "credentials are stored in 1Password".
+# Requiring the value to carry a digit or symbol was the first attempt at telling
+# those apart — but it silently let every alphabetic password through:
+# "the wifi password is correcthorsebattery" did not fire, and neither did
+# "password: bluemountain". Diceware passphrases, wifi codes and door codes are
+# the most commonly *shared* secrets there are, so that hole ran straight down
+# the middle of the one hard gate in the product.
+#
+# So the rule is inverted: any 4+ character value counts as a secret *unless* it
+# is a word we recognise as a state or a predicate. False negatives (a leaked
+# password) are far more costly here than false positives (one extra confirm).
+_PREDICATES = (
+    "slow", "fast", "down", "up", "out", "off", "on", "dead", "live", "gone",
+    "broken", "expired", "expiring", "wrong", "invalid", "correct", "incorrect",
+    "fine", "okay", "good", "bad", "weak", "strong", "stale", "old", "new",
+    "working", "required", "needed", "missing", "reset", "disabled", "enabled",
+    "empty", "blank", "safe", "secure", "unavailable", "unknown", "ready", "set",
+    "changed", "updated", "stored", "saved", "shared", "sent", "case-sensitive",
+    "the", "a", "an", "not", "in", "on", "for", "with", "same", "different",
+)
+_NOT_A_PREDICATE = rf"(?!(?:{'|'.join(_PREDICATES)})\b)"
+# A value: 4+ characters that are not sentence punctuation, and not a predicate.
+_SECRETISH = rf"{_NOT_A_PREDICATE}[^\s,;.!?，。]{{4,}}"
 
 _CREDENTIAL_WORDS = (
     r"password|passwd|pwd|passcode|passphrase|api[_ -]?key|apikey|access[_ -]?key"

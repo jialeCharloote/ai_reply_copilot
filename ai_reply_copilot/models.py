@@ -7,6 +7,13 @@ from datetime import datetime
 from typing import List, Optional
 
 
+def to_local(moment: Optional[datetime]) -> Optional[datetime]:
+    """Convert a stored (UTC) timestamp to the user's timezone for display."""
+    if moment is None or moment.tzinfo is None:
+        return moment
+    return moment.astimezone()
+
+
 @dataclass
 class Message:
     text: str
@@ -14,9 +21,21 @@ class Message:
     timestamp: Optional[datetime]
     sender: Optional[str]
 
+    def local_timestamp(self) -> Optional[datetime]:
+        """The timestamp in the user's own timezone.
+
+        Readers store UTC (chat.db and Slack both hand us epoch-based times), but
+        every consumer of this is human- or model-facing, and both reason about
+        "tonight" and "tomorrow" in *local* time. Rendering UTC meant a message
+        sent at 8pm local was stamped with the next calendar day — so "are you
+        free tonight?" reached the model as 1am the following day.
+        """
+        return to_local(self.timestamp)
+
     def format_line(self) -> str:
         who = "Me" if self.is_from_me else (self.sender or "Them")
-        when = self.timestamp.strftime("%Y-%m-%d %H:%M") if self.timestamp else "?"
+        local = self.local_timestamp()
+        when = local.strftime("%Y-%m-%d %H:%M") if local else "?"
         return f"[{when}] {who}: {self.text}"
 
 

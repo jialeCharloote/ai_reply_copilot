@@ -36,6 +36,23 @@ __all__ = [
 
 DEFAULT_CHAT_DB = Path.home() / "Library" / "Messages" / "chat.db"
 
+# The two AppleScript service types Messages can send on. These are AppleScript
+# enum names, not strings, so they are emitted unquoted into the script.
+IMESSAGE_SERVICE = "iMessage"
+SMS_SERVICE = "SMS"
+
+
+def normalize_service(service_name: Optional[str]) -> str:
+    """Map ``chat.service_name`` onto an AppleScript service type.
+
+    Roughly half of a typical chat.db is ``SMS`` (green bubbles). Anything that
+    is not recognisably SMS is treated as iMessage, which is the safe default:
+    an unknown service on an iMessage-capable handle still sends.
+    """
+    if (service_name or "").strip().upper() == "SMS":
+        return SMS_SERVICE
+    return IMESSAGE_SERVICE
+
 # macOS stores message timestamps as (nano)seconds since 2001-01-01 UTC.
 _APPLE_EPOCH_OFFSET = 978307200
 # Values above this are nanoseconds (modern macOS); below are seconds (legacy).
@@ -303,11 +320,15 @@ def get_chat_identifier(
 
 @dataclass
 class ChatTarget:
-    """How to send to a chat: its GUID, human identifier, and whether it's a group."""
+    """How to send to a chat: its GUID, human identifier, service, and group-ness."""
 
     guid: str
     identifier: str
     is_group: bool
+    # "iMessage" or "SMS". A green-bubble contact has no iMessage account, so
+    # addressing them as a participant of the iMessage service fails — and fails
+    # only at the very end, after the model has already been billed.
+    service: str = IMESSAGE_SERVICE
 
     @property
     def recipient(self) -> str:
@@ -320,16 +341,17 @@ def get_chat_send_target(
 ) -> Optional[ChatTarget]:
     """Resolve how to send to a chat.
 
-    1:1 chats send to a participant handle (phone/email); group chats must send
-    to the existing chat by GUID — ``chat_identifier`` alone is a group GUID
-    stub that AppleScript can't address as a participant. ``style`` 43 marks a
-    group; the ``;+;`` GUID form is a fallback signal.
+    1:1 chats send to a participant handle (phone/email) *on the chat's own
+    service*; group chats must send to the existing chat by GUID —
+    ``chat_identifier`` alone is a group GUID stub that AppleScript can't address
+    as a participant. ``style`` 43 marks a group; the ``;+;`` GUID form is a
+    fallback signal.
     """
     conn = _connect(db_path)
     try:
         row = _fetch(
             conn,
-            "SELECT guid, chat_identifier, style FROM chat WHERE ROWID = ?",
+            "SELECT guid, chat_identifier, style, service_name FROM chat WHERE ROWID = ?",
             (chat_id,),
             one=True,
         )
@@ -339,4 +361,9 @@ def get_chat_send_target(
         return None
     guid = row["guid"] or ""
     is_group = row["style"] == 43 or ";+;" in guid
-    return ChatTarget(guid=guid, identifier=row["chat_identifier"] or "", is_group=is_group)
+    return ChatTarget(
+        guid=guid,
+        identifier=row["chat_identifier"] or "",
+        is_group=is_group,
+        service=normalize_service(row["service_name"]),
+    )

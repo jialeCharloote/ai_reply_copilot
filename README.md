@@ -20,6 +20,11 @@ a reviewed sending path, and an end-to-end `reply` command.
   understanding plus 3 distinct reply candidates, with optional intent/tone/draft.
 - A sending path: send a reviewed reply via iMessage (Messages automation) or
   Slack (`chat.postMessage`), with a confirmation prompt and `--dry-run`.
+  iMessage sends go out on the *chat's own service*: a green-bubble contact has
+  no iMessage account to address, so `charla reply` reads `service_name` from
+  `chat.db` and routes SMS chats over SMS (`charla send` takes `--service sms`).
+  A Slack send is never retried on an ambiguous failure — Slack has no
+  idempotency key, so replaying a lost 5xx would post your reply twice, as you.
 - An end-to-end `reply` command that reads a conversation, generates candidates,
   lets you pick or edit one, and sends after confirmation — the PRD core loop.
 - Local-first personal style profile (applied to suggestions) and a feedback log.
@@ -117,6 +122,7 @@ charla suggest C0123456789 --source slack --tone friendly
 
 # Send a reviewed reply (asks to confirm; --dry-run previews)
 charla send --to "+15551234567" --text "Sounds good, see you at 7!"
+charla send --to "+15557654321" --text "On my way" --service sms   # green bubble
 charla send --source slack --to C0123456789 --text "On it" --dry-run
 
 # End-to-end: read a conversation, get candidates, pick/edit, then send
@@ -184,9 +190,11 @@ Create a Slack app with **Socket Mode + Interactivity** enabled and a message
 shortcut whose Callback ID is `charla_draft_reply`. Tokens needed (see
 `.env.example`): app-level `SLACK_APP_TOKEN` (xapp, scope `connections:write`),
 `SLACK_BOT_TOKEN` (xoxb, to open the modal), and **your** `SLACK_USER_TOKEN`
-(xoxp, user scopes `channels:history`, `groups:history`, `im:history`,
-`mpim:history`, `users:read`, `chat:write`) — the user token is what reads what
-you can see and posts replies as you. If the thread trips the sensitive-content
+(xoxp, user scopes `channels:read`, `groups:read`, `im:read`, `mpim:read`,
+`channels:history`, `groups:history`, `im:history`, `mpim:history`, `users:read`,
+`chat:write`) — the user token is what reads what you can see and posts replies
+as you. The `:read` scopes are what let `conversations.list` *enumerate* your
+conversations; the `:history` scopes only read inside one. If the thread trips the sensitive-content
 scanner, Charla asks before sending context to the cloud model.
 
 The generation core stays dependency-free; only the Slack app needs `slack_bolt`.

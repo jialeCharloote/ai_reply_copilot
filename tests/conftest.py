@@ -64,12 +64,15 @@ def chat_db(tmp_path) -> Path:
         "INSERT INTO chat (ROWID, guid, chat_identifier, display_name, "
         "service_name, style) VALUES (?, ?, ?, ?, ?, ?)",
         [
-            # style 45 = 1:1, style 43 = group. Chat 30 is a group with no
-            # messages, so it stays invisible to the join-based readers/tests
-            # while still exercising get_chat_send_target.
+            # style 45 = 1:1, style 43 = group. Chats 30 and 40 have no messages,
+            # so they stay invisible to the join-based readers/tests while still
+            # exercising get_chat_send_target.
             (10, "iMessage;-;+15551234567", "+15551234567", "Alex", "iMessage", 45),
             (20, "iMessage;-;boss@work.com", "boss@work.com", "", "iMessage", 45),
             (30, "iMessage;+;chat9999", "chat9999", "Launch Team", "iMessage", 43),
+            # A green-bubble 1:1. About half of a real chat.db looks like this,
+            # and the fixture had none — which is why SMS sends stayed broken.
+            (40, "SMS;-;+15557654321", "+15557654321", "Sam", "SMS", 45),
         ],
     )
 

@@ -36,6 +36,31 @@ def _post_json(url: str, headers: dict, payload: dict, timeout: int = 60, **kwar
         raise LLMError(str(exc)) from exc
 
 
+def _anthropic_text(resp: dict, max_tokens: int) -> str:
+    """Pull the text out of a Messages response, naming the real failure.
+
+    Every non-answer used to surface as ``Unexpected Anthropic response: {...}``
+    with the raw body attached — so a truncated draft, a refusal, and a genuine
+    bug were indistinguishable, and the one that actually happens (truncation)
+    was reported as the one that never does.
+    """
+    stop = resp.get("stop_reason")
+    if stop == "max_tokens":
+        raise LLMError(
+            f"The model's reply was cut off at max_tokens ({max_tokens}). Try a "
+            "smaller --num, a shorter --limit, or raise max_tokens."
+        )
+    if stop == "refusal":
+        raise LLMError("The model declined to draft a reply for this conversation.")
+
+    # Not necessarily content[0]: a thinking block would come first if thinking is
+    # ever enabled, and a refusal comes back with no content at all.
+    for block in resp.get("content") or []:
+        if block.get("type") == "text" and block.get("text"):
+            return block["text"]
+    raise LLMError(f"Anthropic returned no text content (stop_reason={stop!r}).")
+
+
 class FakeClient:
     """Returns a canned response. Useful for tests and offline demos."""
 
@@ -93,7 +118,12 @@ class AnthropicClient:
         # Default to the current-generation Opus for the best bilingual/tone
         # quality. Use ``claude-sonnet-5`` via --model for cheaper/faster drafts.
         model: str = "claude-opus-4-8",
-        max_tokens: int = 1024,
+        # Headroom for an understanding + open_points + N candidates. 1024 was not
+        # enough: Chinese costs roughly a token per character, so a bilingual
+        # thread at --num 5 ran off the end, the JSON came back cut mid-string,
+        # and the user was told their model returned invalid JSON. It had not —
+        # we had simply stopped it mid-sentence, and then billed them for it.
+        max_tokens: int = 4096,
     ):
         self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
         self.model = model
@@ -114,10 +144,7 @@ class AnthropicClient:
             "content-type": "application/json",
         }
         resp = _post_json("https://api.anthropic.com/v1/messages", headers, payload)
-        try:
-            return resp["content"][0]["text"]
-        except (KeyError, IndexError) as exc:  # pragma: no cover
-            raise LLMError(f"Unexpected Anthropic response: {resp}") from exc
+        return _anthropic_text(resp, self.max_tokens)
 
 
 DEFAULT_PROVIDER = "anthropic"

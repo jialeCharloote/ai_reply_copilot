@@ -15,6 +15,8 @@ import subprocess
 from dataclasses import dataclass
 from typing import Callable, Optional
 
+from .imessage import IMESSAGE_SERVICE, normalize_service
+
 
 class SendError(RuntimeError):
     """Raised when a message cannot be sent."""
@@ -33,12 +35,23 @@ def _escape_applescript(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
-def build_imessage_applescript(recipient: str, text: str) -> str:
+def build_imessage_applescript(
+    recipient: str, text: str, service: str = IMESSAGE_SERVICE
+) -> str:
+    """Build the 1:1 send script for ``service`` ("iMessage" or "SMS").
+
+    The service is not cosmetic. An SMS-only contact has no iMessage account, so
+    ``1st account whose service type = iMessage`` either picks the wrong account
+    or raises — which is why green-bubble chats could not be replied to at all.
+    """
+    service = normalize_service(service)
     recipient = _escape_applescript(recipient)
     text = _escape_applescript(text)
+    # `service` is an AppleScript enum (iMessage / SMS), so it is interpolated
+    # unquoted — and only ever from normalize_service, never from user input.
     return (
         'tell application "Messages"\n'
-        "    set targetService to 1st account whose service type = iMessage\n"
+        f"    set targetService to 1st account whose service type = {service}\n"
         f'    set targetBuddy to participant "{recipient}" of targetService\n'
         f'    send "{text}" to targetBuddy\n'
         "end tell"
@@ -77,16 +90,19 @@ def send_imessage(
     recipient: str,
     text: str,
     *,
+    service: str = IMESSAGE_SERVICE,
     dry_run: bool = False,
     runner: Optional[Callable[[str], str]] = None,
 ) -> SendResult:
     if not text.strip():
         raise SendError("Refusing to send an empty message.")
-    script = build_imessage_applescript(recipient, text)
+    service = normalize_service(service)
+    script = build_imessage_applescript(recipient, text, service)
+    label = "SMS" if service == "SMS" else "iMessage"
     if dry_run:
-        return SendResult("imessage", recipient, text, True, "dry-run (not sent)")
+        return SendResult("imessage", recipient, text, True, f"dry-run (not sent, {label})")
     (runner or _default_osascript_runner)(script)
-    return SendResult("imessage", recipient, text, False, "sent via Messages")
+    return SendResult("imessage", recipient, text, False, f"sent via Messages ({label})")
 
 
 def send_imessage_to_chat(

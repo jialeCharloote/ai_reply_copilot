@@ -264,6 +264,28 @@ def selected_text(state_values: dict, candidates: List[str]) -> str:
         return ""
 
 
+def picked_a_draft(state_values: dict) -> bool:
+    """Did the user actually select one of the radio options?"""
+    selected = (
+        state_values.get(CHOICE_BLOCK, {})
+        .get(CHOICE_ACTION, {})
+        .get("selected_option")
+    )
+    return bool((selected or {}).get("value", ""))
+
+
+def drafts_expired(state_values: dict, candidates: List[str]) -> bool:
+    """The user picked a draft, but the text behind it is gone.
+
+    The cache is bounded and never popped when a modal is closed unsubmitted, so
+    an older open modal's drafts can be evicted underneath it — and a process
+    restart drops them all. Without this the submit handler could only say "Pick
+    a draft, or write your own" to a user who *had* picked one, and re-picking
+    would never work, because the candidates it resolves against are gone.
+    """
+    return picked_a_draft(state_values) and not candidates
+
+
 def reply_thread_ts(meta: Dict[str, Optional[str]]) -> Optional[str]:
     return meta.get("thread_ts") or meta.get("message_ts")
 
@@ -447,6 +469,22 @@ def build_app(*, user_token: Optional[str] = None, llm_factory=None):
         except Exception:
             logger.exception("Charla could not read the submitted view")
             ack()
+            return
+
+        # Only when there is nothing to send: a typed edit still wins, even if the
+        # cached candidates behind the radio buttons are long gone.
+        if not text and drafts_expired(view["state"]["values"], candidates):
+            # They picked a draft we no longer hold. Telling them to pick one is
+            # a lie they cannot act on — re-picking resolves against the same
+            # empty list. Say what actually happened, the way _confirm does.
+            ack(
+                response_action="update",
+                view=message_view(
+                    dumps_meta(meta),
+                    "This draft expired — run the shortcut again. (Anything you typed "
+                    "in the edit box still sends.)",
+                ),
+            )
             return
 
         if not text:

@@ -31,6 +31,14 @@ oauth_config:
   scopes:
     # The user token reads what YOU can see and posts replies AS YOU.
     user:
+      # *:history reads the messages in a conversation; *:read is what lets
+      # conversations.list enumerate the conversations in the first place. Without
+      # these four, `charla slack-list` (and "reply to my most recent thread")
+      # fails with missing_scope on a fresh manifest install.
+      - channels:read
+      - groups:read
+      - im:read
+      - mpim:read
       - channels:history
       - groups:history
       - im:history

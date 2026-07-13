@@ -6,6 +6,8 @@ import pytest
 
 from ai_reply_copilot.send import send_slack
 from ai_reply_copilot.slack import (
+    decode_markup,
+    escape_markup,
     FakeSlackClient,
     SlackClient,
     SlackError,
@@ -245,3 +247,84 @@ def test_channel_pagination_follows_the_cursor():
         },
     })
     assert {c.channel_id for c in list_conversations(client)} == {"C0", "C1"}
+
+
+# --- Slack's wire format is not what people read -------------------------------
+#
+# Slack hands you mrkdwn, not display text: users are `<@U024BE7LH>`, channels are
+# `<#C0G9QF9GZ|general>`, links are `<url|label>`, and `& < >` arrive escaped.
+# Passing that to the model raw meant it saw an ID where a name belongs — and
+# wrote "Hi U024BE7LH" straight into the draft the user was about to send.
+
+
+def test_a_user_mention_is_resolved_to_a_name():
+    client = FakeSlackClient({"users.info": {"ok": True, "user": {"real_name": "Alex"}}})
+    assert decode_markup("<@U2> can you look?", client) == "@Alex can you look?"
+
+
+def test_a_mention_with_an_inline_label_needs_no_lookup():
+    assert decode_markup("<@U2|alex> ping", None) == "@alex ping"
+
+
+def test_an_unresolvable_mention_degrades_to_the_id():
+    assert decode_markup("<@U999> hi", None) == "@U999 hi"
+
+
+def test_channels_links_and_specials_decode():
+    assert decode_markup("see <#C1|general>", None) == "see #general"
+    assert decode_markup("<https://x.com|the doc> is up", None) == "the doc is up"
+    assert decode_markup("read <https://x.com/a>", None) == "read https://x.com/a"
+    assert decode_markup("<!here> standup in 5", None) == "@here standup in 5"
+
+
+def test_html_entities_are_unescaped():
+    assert decode_markup("keep p99 &lt;200ms &amp; &gt;99% uptime", None) == (
+        "keep p99 <200ms & >99% uptime"
+    )
+
+
+def test_a_draft_is_escaped_on_the_way_out():
+    # An ordinary reply Slack would otherwise parse as markup and mangle.
+    assert escape_markup("keep p99 <200ms & >99% uptime") == (
+        "keep p99 &lt;200ms &amp; &gt;99% uptime"
+    )
+
+
+def test_escaping_does_not_double_escape_the_ampersand():
+    assert escape_markup("a & b") == "a &amp; b"
+    assert escape_markup("<b>") == "&lt;b&gt;"
+
+
+def test_post_message_escapes_the_text_it_sends():
+    client = FakeSlackClient({})
+    client.post_message("C1", "keep p99 <200ms")
+    _method, payload = client.posted[0]
+    assert payload["text"] == "keep p99 &lt;200ms"
+
+
+def test_a_round_trip_survives():
+    # What Slack sends us, decoded and re-escaped, is what Slack sent us.
+    wire = "keep p99 &lt;200ms &amp; &gt;99%"
+    assert escape_markup(decode_markup(wire, None)) == wire
+
+
+def test_context_decodes_mentions_and_drops_join_noise():
+    """"X has joined the channel" is not a message anyone awaits a reply to —
+    but unanswered_index would happily treat it as the thing to answer."""
+    client = FakeSlackClient(
+        {
+            "conversations.history": {
+                "ok": True,
+                "messages": [
+                    {"ts": "1000.0003", "text": "<@U2> has joined the channel",
+                     "user": "U2", "subtype": "channel_join"},
+                    {"ts": "1000.0002", "text": "ping <@U2> about <#C1|general>",
+                     "user": "U3"},
+                ],
+            },
+            "users.info": {"ok": True, "user": {"real_name": "Alex"}},
+        }
+    )
+    messages = get_conversation_context(client, "C1")
+    assert len(messages) == 1
+    assert messages[0].text == "ping @Alex about #general"

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import time
 import urllib.parse
 from dataclasses import dataclass
@@ -85,7 +86,7 @@ class SlackClient:
         self._auth_user_id: Optional[str] = None
 
     def _request(self, method: str, url: str, *, data: Optional[bytes] = None,
-                 http_method: str = "GET") -> dict:
+                 http_method: str = "GET", idempotent: bool = True) -> dict:
         """One request, with the retry policy from ``net.py``.
 
         Slack rate-limits hard (conversations.history is ~50 req/min). The old
@@ -106,6 +107,7 @@ class SlackClient:
                 method=http_method,
                 timeout=self.timeout,
                 sleep=self._sleep,
+                idempotent=idempotent,
             )
         except HttpError as exc:
             raise SlackError(f"Slack request failed: {exc}") from exc
@@ -120,21 +122,30 @@ class SlackClient:
             url = f"{url}?{urllib.parse.urlencode(params)}"
         return self._request(method, url)
 
-    def post(self, method: str, payload: dict) -> dict:
+    def post(self, method: str, payload: dict, *, idempotent: bool = True) -> dict:
         return self._request(
             method,
             f"{SLACK_API_BASE}/{method}",
             data=json.dumps(payload).encode("utf-8"),
             http_method="POST",
+            idempotent=idempotent,
         )
 
     def post_message(
         self, channel: str, text: str, *, thread_ts: Optional[str] = None
     ) -> dict:
-        payload = {"channel": channel, "text": text}
+        """Post a message. Never retried on an ambiguous failure.
+
+        ``slack_app`` acks the modal before sending precisely so that Slack's own
+        3-second retry cannot double-post the user's reply. That care was undone
+        one layer down, where the HTTP client happily re-POSTed on a 5xx or a
+        dropped connection — the two cases where Slack may already have created
+        the message. See ``net.request_json(idempotent=...)``.
+        """
+        payload = {"channel": channel, "text": escape_markup(text)}
         if thread_ts:
             payload["thread_ts"] = thread_ts
-        return self.post("chat.postMessage", payload)
+        return self.post("chat.postMessage", payload, idempotent=False)
 
     def auth_user_id(self) -> Optional[str]:
         if self._auth_user_id is None:
@@ -206,7 +217,7 @@ class FakeSlackClient(SlackClient):
             )
         return data
 
-    def post(self, method: str, payload: dict) -> dict:
+    def post(self, method: str, payload: dict, *, idempotent: bool = True) -> dict:
         self.posted.append((method, payload))
         handler = self._responses.get(method, {"ok": True, "ts": "1000.0001"})
         data = handler(payload) if callable(handler) else handler
@@ -326,11 +337,61 @@ def list_conversations(
     return conversations[:limit]
 
 
+# Slack does not hand you the text people see. It hands you *mrkdwn*: users are
+# `<@U024BE7LH>`, channels are `<#C0G9QF9GZ|general>`, links are `<url|label>`,
+# and `& < >` arrive HTML-escaped. Feeding that to the model raw meant it saw a
+# user ID where a name belongs — and duly wrote "Hi U024BE7LH" into the draft.
+_USER_REF = re.compile(r"<@([UW][A-Z0-9]+)(?:\|([^>]*))?>")
+_CHANNEL_REF = re.compile(r"<#[A-Z0-9]+(?:\|([^>]*))?>")
+_SPECIAL_REF = re.compile(r"<!(here|channel|everyone)(?:\|[^>]*)?>")
+_LINK_REF = re.compile(r"<((?:https?|mailto):[^|>]+)(?:\|([^>]*))?>")
+
+# Subtypes that are noise in a reply context. "X has joined the channel" is not a
+# message anyone is waiting on a reply to, but unanswered_index would happily
+# treat it as one.
+_IGNORED_SUBTYPES = frozenset(
+    {"channel_join", "channel_leave", "channel_topic", "channel_purpose",
+     "channel_name", "channel_archive", "channel_unarchive", "group_join",
+     "group_leave", "bot_message", "message_changed", "message_deleted",
+     "thread_broadcast_join"}
+)
+
+
+def decode_markup(text: str, client: Optional[SlackClient] = None) -> str:
+    """Turn Slack's wire format into what a human actually reads on screen."""
+    def user(match: re.Match) -> str:
+        label = match.group(2)
+        if label:
+            return f"@{label}"
+        name = client.user_name(match.group(1)) if client else None
+        return f"@{name or match.group(1)}"
+
+    text = _USER_REF.sub(user, text)
+    text = _CHANNEL_REF.sub(lambda m: f"#{m.group(1)}" if m.group(1) else "#channel", text)
+    text = _SPECIAL_REF.sub(lambda m: f"@{m.group(1)}", text)
+    # A link renders as its label when it has one, else the bare URL.
+    text = _LINK_REF.sub(lambda m: m.group(2) or m.group(1), text)
+    # Slack escapes exactly these three, and only these three.
+    return text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+def escape_markup(text: str) -> str:
+    """Escape a draft for chat.postMessage.
+
+    Slack parses `& < >` in the text it is sent. An ordinary reply — "keep p99
+    <200ms and >99% uptime" — is otherwise read as markup and renders mangled or
+    silently loses text. Ampersand first, or the escapes escape each other.
+    """
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def _message_from_raw(
     client: SlackClient, raw: dict, auth_id: Optional[str]
 ) -> Optional[Message]:
     """Turn one raw Slack message dict into a shared ``Message`` (or None)."""
-    text = (raw.get("text") or "").strip()
+    if raw.get("subtype") in _IGNORED_SUBTYPES:
+        return None
+    text = decode_markup((raw.get("text") or "").strip(), client).strip()
     if not text:
         return None
     user_id = raw.get("user")
