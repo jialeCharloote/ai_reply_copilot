@@ -195,3 +195,89 @@ def test_cli_voice_eval_missing_fixture_exits_2(capsys):
     err = capsys.readouterr().err
     assert code == 2
     assert "error:" in err
+
+
+# --- measurement mode: the saved voice vs the drafts the product generated ------
+# (the conftest autouse fixture points AI_REPLY_COPILOT_HOME at a fresh temp
+# directory, so these compose their own state without touching a real home)
+
+
+def _save_my_voice():
+    from ai_reply_copilot.storage import save_voice
+
+    save_voice(analyze_voice(_MINE))
+
+
+def test_generating_replies_feeds_the_draft_pool():
+    # The log lives in generate_replies — the one choke point every surface
+    # (suggest, reply flow, Slack app) passes through — so the eval pool grows
+    # no matter which front-end drafted.
+    import json as _json
+
+    from ai_reply_copilot.generate import generate_replies
+    from ai_reply_copilot.llm import FakeClient
+    from ai_reply_copilot.models import Message
+    from ai_reply_copilot.storage import load_recent_drafts
+
+    fake = FakeClient(
+        _json.dumps({"understanding": "u", "candidates": ["ok 我看下", "sounds good"]})
+    )
+    generate_replies([Message(text="hi", is_from_me=False, timestamp=None, sender=None)], fake)
+    assert load_recent_drafts() == ["ok 我看下", "sounds good"]
+
+
+def test_against_saved_scores_the_logged_drafts(capsys):
+    from ai_reply_copilot.storage import record_drafts
+
+    _save_my_voice()
+    record_drafts(
+        [
+            "ok 我明天上午过一遍 timeline",
+            "这个 branch 今晚能 merge 吗?",
+            "sounds good, i'll send the doc first",
+            "还没定，等 marketing 那边 confirm",
+            "on it, will update before eod",
+        ]
+    )
+    code = cli.main(["voice", "eval", "--against-saved"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "your last 5 drafts" in out
+    assert "statistically consistent" in out  # honest wording, not "sounds like you"
+
+
+def test_against_saved_flags_off_voice_drafts_and_exits_1(capsys):
+    from ai_reply_copilot.storage import record_drafts
+
+    _save_my_voice()
+    record_drafts(
+        ["Thank you so much! 😊 I will certainly review the entire document tonight."] * 5
+    )
+    code = cli.main(["voice", "eval", "--against-saved"])
+    out = capsys.readouterr().out
+    assert code == 1
+    assert "off on:" in out
+    assert "emoji" in out
+
+
+def test_against_saved_warns_when_the_pool_is_too_small(capsys):
+    from ai_reply_copilot.storage import record_drafts
+
+    _save_my_voice()
+    record_drafts(["ok 我看下 proposal", "sounds good, will do"])
+    cli.main(["voice", "eval", "--against-saved"])
+    out = capsys.readouterr().out
+    assert "only 2 drafts" in out
+
+
+def test_against_saved_without_a_voice_or_without_drafts_says_what_to_run(capsys):
+    code = cli.main(["voice", "eval", "--against-saved"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "charla voice learn" in err
+
+    _save_my_voice()
+    code = cli.main(["voice", "eval", "--against-saved"])
+    err = capsys.readouterr().err
+    assert code == 2
+    assert "charla suggest" in err

@@ -8,6 +8,7 @@ from typing import List, Optional
 
 from .models import Message, render_context
 from .prompts import StyleProfile, build_system_prompt, build_user_prompt
+from .storage import record_drafts
 
 
 class GenerationError(RuntimeError):
@@ -107,4 +108,14 @@ def generate_replies(
     raw = client.complete(system, user)
     suggestion = parse_response(raw)
     suggestion.language = language
+
+    # Log the candidates locally so `charla voice eval --against-saved` has real
+    # drafts to score. This lives here, not in the CLI, because it is the one
+    # choke point every surface (suggest, reply flow, Slack app) passes through —
+    # the eval pool must grow no matter which front-end drafted. Logging must
+    # never break drafting, so a full disk degrades to an unlogged draft.
+    try:
+        record_drafts(suggestion.candidates)
+    except OSError:
+        pass
     return suggestion

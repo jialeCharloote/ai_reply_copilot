@@ -162,6 +162,40 @@ def compare_drafts(profile: VoiceProfile, drafts) -> DraftReport:
     return DraftReport(drafts=observed.sampled, checks=checks)
 
 
+# Below this, a rate over the draft pool moves in steps bigger than the
+# tolerance, so a single draft can flip a dimension — the report says so
+# instead of pretending the numbers are solid.
+MIN_DRAFTS_FOR_RATES = 5
+
+
+def format_draft_report(profile: VoiceProfile, report: DraftReport) -> str:
+    """The measurement-mode report: your saved voice vs your recent drafts."""
+    lines: List[str] = []
+    lines.append(
+        f"Voice fidelity — your last {report.drafts} drafts vs the voice "
+        f"learned from {profile.sampled} of your messages"
+    )
+    lines.append("=" * 64)
+    for check in report.checks:
+        mark = "✗" if check.off else "✓"
+        lines.append(f"  {mark} {check.label}: {check.detail}")
+    lines.append("-" * 64)
+    if report.faithful:
+        lines.append(
+            "statistically consistent with your voice — which is necessary, "
+            "not sufficient; word choice and rhythm are not measured here"
+        )
+    else:
+        off = [c.label for c in report.checks if c.off]
+        lines.append(f"off on: {', '.join(off)}")
+    if report.drafts < MIN_DRAFTS_FOR_RATES:
+        lines.append(
+            f"(only {report.drafts} drafts — rates this coarse can be flipped "
+            "by a single draft; run `charla suggest` a few more times)"
+        )
+    return "\n".join(lines)
+
+
 # ── The labelled fixture ──────────────────────────────────────────────────────
 # Shape: {"voice_samples": [...], "draft_sets": [{"name", "why", "drafts",
 # "expect_off"}]}. `expect_off` lists the dimensions each set deliberately

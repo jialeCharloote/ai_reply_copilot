@@ -215,9 +215,23 @@ model call), so it works as a regression harness: change the prompt, rerun, see
 which dimension moved.
 
 ```bash
-charla voice eval                       # bundled synthetic fixture
-charla voice eval --fixture my.json     # your own eval set
+charla voice eval --against-saved       # YOUR saved voice vs YOUR recent drafts
+charla voice eval                       # self-check on the bundled synthetic fixture
+charla voice eval --fixture my.json     # self-check on your own eval set
 ```
+
+`--against-saved` is the mode that answers the real question. Every candidate
+`suggest`/`reply`/the Slack app generates is appended to a local draft log
+(`drafts.jsonl`, capped, same local-only home as everything else — inspect or
+delete it like the rest), and the eval scores the last 50 of them against your
+saved profile. Exit 1 means the drafts are measurably off your voice. One run
+of `suggest` yields three candidates, and a rate over three drafts moves in
+steps of 0.33 — noise, not signal — so the eval reads a pool accumulated
+across runs and says so when the pool is still too small to trust.
+
+The no-flag form is the self-check: it runs the detector against a bundled
+labelled fixture and exits nonzero if the flags disagree with the labels —
+useful in CI to catch the measuring stick itself moving.
 
 The fixture pairs synthetic voice samples with labelled draft sets (one
 faithful, one in the default AI register, one that answers a bilingual texter

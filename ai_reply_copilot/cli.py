@@ -42,6 +42,7 @@ from .storage import (
     ConversationStoreError,
     forget_voice,
     get_conversation_language,
+    load_recent_drafts,
     load_style_profile,
     load_voice,
     profile_path,
@@ -267,11 +268,24 @@ def build_parser() -> argparse.ArgumentParser:
         "eval",
         help="Style-fidelity eval: score drafts against a voice, dimension by dimension",
     )
-    p_voice_eval.add_argument(
+    eval_mode = p_voice_eval.add_mutually_exclusive_group()
+    eval_mode.add_argument(
+        "--against-saved",
+        action="store_true",
+        help="Score your recently generated drafts against your saved voice "
+        "(the drafts `suggest`/`reply` produced are logged locally for this)",
+    )
+    eval_mode.add_argument(
         "--fixture",
         default=None,
         help="Eval set JSON with voice samples and labelled draft sets "
         "(default: the bundled synthetic fixture — never real chats)",
+    )
+    p_voice_eval.add_argument(
+        "--last",
+        type=int,
+        default=50,
+        help="With --against-saved: how many recent drafts to score (default 50)",
     )
 
     p_profile = sub.add_parser("profile", help="View or set your personal style")
@@ -690,12 +704,28 @@ def _cmd_voice(args: argparse.Namespace) -> int:
         return 0
 
     if args.voice_command == "eval":
+        if args.against_saved:
+            # Measurement mode: the saved profile vs the drafts the product
+            # actually generated. Exit 1 means "the drafts are off-voice".
+            profile = load_voice()
+            if profile is None or not profile.sampled:
+                raise ValueError("no voice learned yet — run `charla voice learn` first")
+            drafts = load_recent_drafts(limit=args.last)
+            if not drafts:
+                raise ValueError(
+                    "no drafts logged yet — run `charla suggest` or `charla reply` "
+                    "a few times first (candidates are logged locally as they are generated)"
+                )
+            report = voice_eval.compare_drafts(profile, drafts)
+            print(voice_eval.format_draft_report(profile, report))
+            return 0 if report.faithful else 1
+
+        # Fixture mode: a self-check of the measuring stick. Exit 1 means the
+        # flags disagree with the fixture's labels — the eval stopped catching
+        # a labelled deviation or started flagging noise. Either way the ruler
+        # moved, which CI should refuse to let pass silently.
         result = voice_eval.evaluate(voice_eval.load_eval_set(args.fixture))
         print(voice_eval.format_report(result))
-        # Nonzero when the flags disagree with the fixture's labels: either the
-        # eval stopped catching a labelled deviation or started flagging noise.
-        # Both mean the measuring stick moved, which is exactly what CI should
-        # refuse to let pass silently.
         return 0 if result.agrees else 1
 
     # learn

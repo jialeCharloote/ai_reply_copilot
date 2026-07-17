@@ -23,6 +23,7 @@ PROFILE_FILENAME = "profile.json"
 FEEDBACK_FILENAME = "feedback.jsonl"
 CONVERSATIONS_FILENAME = "conversations.json"
 VOICE_FILENAME = "voice.json"
+DRAFTS_FILENAME = "drafts.jsonl"
 
 # Feedback ratings mirror the PRD's feedback buttons.
 FEEDBACK_RATINGS = ("useful", "too_ai", "wrong_tone", "not_safe", "not_like_me")
@@ -264,3 +265,62 @@ def load_feedback() -> List[dict]:
         except json.JSONDecodeError:
             continue
     return entries
+
+
+# ── Draft log ────────────────────────────────────────────────────────────────
+# Every generated candidate, appended locally so `charla voice eval
+# --against-saved` has something real to score. One run of `suggest` yields
+# three candidates — a rate over three drafts moves in steps of 0.33, which is
+# pure noise — so the eval only becomes meaningful over a pool accumulated
+# across runs. Local like everything else here; inspect or delete at will.
+
+# Enough for a stable eval window (the eval reads the last ~50), small enough
+# that months of drafting derived from private conversations does not pile up
+# on disk forever.
+_DRAFTS_KEEP = 500
+
+
+def drafts_path() -> Path:
+    return config_dir() / DRAFTS_FILENAME
+
+
+def record_drafts(candidates: List[str], source: str = "", target: str = "") -> Optional[Path]:
+    """Append generated candidates to the local draft log."""
+    texts = [t.strip() for t in candidates if t and t.strip()]
+    if not texts:
+        return None
+    _ensure_dir()
+    path = drafts_path()
+    stamp = datetime.now(tz=timezone.utc).isoformat()
+    with path.open("a", encoding="utf-8") as handle:
+        for text in texts:
+            entry = {"timestamp": stamp, "source": source, "target": target, "text": text}
+            handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if len(lines) > _DRAFTS_KEEP:
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text("\n".join(lines[-_DRAFTS_KEEP:]) + "\n", encoding="utf-8")
+        os.replace(tmp, path)
+    return path
+
+
+def load_recent_drafts(limit: int = 50) -> List[str]:
+    """The last ``limit`` generated drafts, oldest first. Corrupt lines are
+    skipped — a truncated log must not take the eval down with it."""
+    path = drafts_path()
+    if not path.exists():
+        return []
+    texts: List[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        text = str(entry.get("text", "") or "").strip()
+        if text:
+            texts.append(text)
+    return texts[-limit:] if limit > 0 else []
