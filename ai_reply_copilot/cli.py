@@ -51,6 +51,7 @@ from .storage import (
     set_conversation_language,
     voice_path,
 )
+from . import voice_eval
 from .voice import describe_for_prompt, learn_voice
 
 
@@ -262,6 +263,16 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db_arg(p_voice_learn)
     voice_sub.add_parser("show", help="Show the learned voice (and what would be uploaded)")
     voice_sub.add_parser("forget", help="Delete the learned voice")
+    p_voice_eval = voice_sub.add_parser(
+        "eval",
+        help="Style-fidelity eval: score drafts against a voice, dimension by dimension",
+    )
+    p_voice_eval.add_argument(
+        "--fixture",
+        default=None,
+        help="Eval set JSON with voice samples and labelled draft sets "
+        "(default: the bundled synthetic fixture — never real chats)",
+    )
 
     p_profile = sub.add_parser("profile", help="View or set your personal style")
     profile_sub = p_profile.add_subparsers(dest="profile_command", required=True)
@@ -677,6 +688,15 @@ def _cmd_voice(args: argparse.Namespace) -> int:
     if args.voice_command == "forget":
         print("Forgot the learned voice." if forget_voice() else "Nothing to forget.")
         return 0
+
+    if args.voice_command == "eval":
+        result = voice_eval.evaluate(voice_eval.load_eval_set(args.fixture))
+        print(voice_eval.format_report(result))
+        # Nonzero when the flags disagree with the fixture's labels: either the
+        # eval stopped catching a labelled deviation or started flagging noise.
+        # Both mean the measuring stick moved, which is exactly what CI should
+        # refuse to let pass silently.
+        return 0 if result.agrees else 1
 
     # learn
     samples = sample_sent_messages(db_path=args.db, limit=args.sample)

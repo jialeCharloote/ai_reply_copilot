@@ -1,0 +1,61 @@
+{
+  "_comment": "Entirely synthetic: invented people, invented drafts. This repo is public, so no real chat content belongs here — not even anonymised. The persona is a bilingual texter who writes short, lowercase, code-switched messages with no emoji and no final periods; each draft set below deviates on the dimensions listed in expect_off, and only those.",
+  "voice_samples": [
+    "ok 我下午看下那个 proposal",
+    "这个 API 什么时候 deploy?",
+    "还没 merge，CI 那边有点问题",
+    "嗯嗯 可以，那就这么定了",
+    "figma 链接发我下?",
+    "哈哈 好，那我先去开会了",
+    "sounds good, will confirm by thursday",
+    "can't tonight, tomorrow works?",
+    "on it, update by tonight",
+    "let me check and revert",
+    "just shipped it, take a look",
+    "ok deal"
+  ],
+  "draft_sets": [
+    {
+      "name": "faithful",
+      "why": "same register: short, code-switched, lowercase English starts, no emoji, no final period",
+      "drafts": [
+        "ok 我明天上午过一遍 timeline",
+        "这个 branch 今晚能 merge 吗?",
+        "sounds good, i'll send the doc first",
+        "还没定，等 marketing 那边 confirm",
+        "on it, will update before eod"
+      ],
+      "expect_off": []
+    },
+    {
+      "name": "assistant-flavored",
+      "why": "the default AI register: long, capitalised, full sentences with periods, exclamation marks, emoji",
+      "drafts": [
+        "好的！😊 我今天下午会仔细看一遍这份 proposal，看完之后第一时间把详细的 feedback 整理发给你。",
+        "Thank you so much for the update! 😊 I will review the document carefully tonight and send over my detailed thoughts tomorrow morning.",
+        "That sounds like a wonderful plan! 🎉 Please feel free to let me know if there is anything else I can help you with.",
+        "非常感谢你的耐心等待！这个 API 的 migration 我们计划在周四晚上正式 deploy，到时候我会同步最新进展给你。",
+        "Of course! 😊 I would be happy to schedule a sync meeting for Thursday afternoon, and I look forward to connecting then."
+      ],
+      "expect_off": [
+        "median_chars",
+        "emoji_rate",
+        "ends_with_period_rate",
+        "starts_lowercase_rate",
+        "exclamation_rate"
+      ]
+    },
+    {
+      "name": "wrong-language",
+      "why": "right register, wrong tongue: answers a half-Chinese texter in pure English",
+      "drafts": [
+        "sure, will take a look tomorrow",
+        "when is this going out?",
+        "not merged yet, ci is being flaky",
+        "Sounds good, thursday works",
+        "on it, update by tonight"
+      ],
+      "expect_off": ["chinese_rate"]
+    }
+  ]
+}

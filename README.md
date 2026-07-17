@@ -201,6 +201,40 @@ The generation core stays dependency-free; only the Slack app needs `slack_bolt`
 The shared engine lives in `drafting.py`, so later surfaces (menu-bar app,
 browser extension) are thin front-ends over the same code.
 
+## Does it actually sound like you? (voice eval)
+
+`voice learn` measures how you write; nothing was measuring whether the drafts
+coming back *honour* that. The only signal was you filing `feedback not_like_me`
+— one anecdote at a time, after the fact. `charla voice eval` closes the loop:
+it scores a set of drafts with the **same statistics `analyze_voice` uses to
+learn your profile** (length, emoji, punctuation, capitalisation, questions,
+Chinese/English mix) and reports each dimension's deviation with a magnitude —
+"emoji on 0.80 of drafts vs your 0.00", "drafts ≈6× longer than you write" —
+never just "doesn't sound like you". It is deterministic and fully offline (no
+model call), so it works as a regression harness: change the prompt, rerun, see
+which dimension moved.
+
+```bash
+charla voice eval                       # bundled synthetic fixture
+charla voice eval --fixture my.json     # your own eval set
+```
+
+The fixture pairs synthetic voice samples with labelled draft sets (one
+faithful, one in the default AI register, one that answers a bilingual texter
+in pure English — code-switching is a first-class dimension, so "这个 API 什么
+时候 deploy?" counts as the Chinese it is). Each set declares which dimensions
+it deliberately deviates on; the run exits nonzero if the eval misses a
+labelled deviation *or* flags beyond the labels, because either way the
+measuring stick moved.
+
+Two limits, honestly: the fixture is entirely invented — this repo is public,
+so no real chat content goes in it, which also means the numbers describe the
+detector, not any real person's voice. And matching every statistic is
+necessary, not sufficient: a draft can hit your length, emoji rate and
+punctuation and still not *sound* like you — word choice and rhythm live in the
+exemplars and the model, not in these counters. Red is reliable; all-green
+means "statistically consistent", not "indistinguishable from you".
+
 ## Development
 
 ```bash
