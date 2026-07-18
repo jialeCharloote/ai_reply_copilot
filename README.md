@@ -233,6 +233,20 @@ The no-flag form is the self-check: it runs the detector against a bundled
 labelled fixture and exits nonzero if the flags disagree with the labels —
 useful in CI to catch the measuring stick itself moving.
 
+The same statistics also work at draft time: a candidate that *severely*
+breaks your voice gets a one-line flag right in the pick list (CLI and Slack
+modal both) — "⚠ ≈4× longer than you usually write", "⚠ emoji — you almost
+never use them" — so the off-voice draft is visible before you pick it, not
+after you sent it. Deliberately conservative: it only fires on habits your
+messages basically never show and on drafts several times your length,
+because a warning that fires on normal variation trains you to ignore all of
+them. It also never flags language — the reply language follows the
+conversation on purpose (your English work channel gets English drafts), and
+nagging about it per candidate would fight that. `--ignore-profile` (or
+`CHARLA_NO_VOICE=1` for the Slack app) suppresses the voice and with it the
+flags; `--json` carries them as `voice_hints`, aligned with `candidates`, so
+front-ends can badge drafts without re-deriving the stats.
+
 The fixture pairs synthetic voice samples with labelled draft sets (one
 faithful, one in the default AI register, one that answers a bilingual texter
 in pure English — code-switching is a first-class dimension, so "这个 API 什么

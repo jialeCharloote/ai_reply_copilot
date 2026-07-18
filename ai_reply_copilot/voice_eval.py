@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from .voice import VoiceProfile, analyze_voice
+from .voice import VoiceProfile, _has_emoji, analyze_voice
 
 # A rate is a fraction of the draft set: with five drafts a single message
 # moves it by 0.2, so anything tighter than this flags sampling noise as style
@@ -166,6 +166,62 @@ def compare_drafts(profile: VoiceProfile, drafts) -> DraftReport:
 # tolerance, so a single draft can flip a dimension — the report says so
 # instead of pretending the numbers are solid.
 MIN_DRAFTS_FOR_RATES = 5
+
+
+# ── Per-candidate hints at draft time ────────────────────────────────────────
+# The pool statistics above need many drafts; a single candidate can only be
+# judged on what is meaningful at n=1: "you basically never do X, this draft
+# does X", plus extreme length. Everything here is deliberately conservative —
+# a hint that fires on half the candidates trains the user to ignore all of
+# them. Two deliberate absences:
+#
+# - No language hint. The reply language follows the *conversation* (an English
+#   work channel gets English drafts from a half-Chinese texter — that is
+#   resolve_language working, not the voice failing), so a per-candidate
+#   language nag would fight a decision the product already made on purpose.
+# - No "the draft lacks a habit of yours" hints. One draft legitimately varies;
+#   only the pool (`--against-saved`) can say a habit was dropped.
+
+# Below this rate, the user's own messages basically never do it, so one draft
+# doing it is a real register break rather than a variation.
+NEVER_RATE = 0.05
+
+# Per-candidate length is hinted at "reads as a different person", not "a bit
+# long" — intent can legitimately double a draft (a formal decline runs long),
+# so this is far looser than the pool-level LENGTH_RATIO.
+HINT_LENGTH_RATIO = 3.0
+
+
+def off_voice_hints(profile: Optional[VoiceProfile], text: str) -> List[str]:
+    """Severe, single-draft-meaningful deviations from the learned voice.
+
+    Returns short human notes ("≈4× longer than you usually write"), empty when
+    nothing is severely off or no voice was learned. Uses the same counters as
+    ``analyze_voice`` (``_has_emoji``, the same punctuation checks), so a draft
+    hinted here is the same draft the pool eval would flag later.
+    """
+    if not profile or not profile.sampled:
+        return []
+    candidate = (text or "").strip()
+    if not candidate:
+        return []
+
+    hints: List[str] = []
+    if (
+        profile.median_chars
+        and len(candidate) > profile.median_chars * HINT_LENGTH_RATIO
+        and len(candidate) - profile.median_chars > LENGTH_SLACK_CHARS
+    ):
+        hints.append(
+            f"≈{len(candidate) / profile.median_chars:.0f}× longer than you usually write"
+        )
+    if profile.emoji_rate < NEVER_RATE and _has_emoji(candidate):
+        hints.append("emoji — you almost never use them")
+    if profile.exclamation_rate < NEVER_RATE and ("!" in candidate or "！" in candidate):
+        hints.append("exclamation marks — you almost never use them")
+    if profile.ends_with_period_rate < NEVER_RATE and candidate.endswith((".", "。")):
+        hints.append("ends with a period — you usually leave it off")
+    return hints
 
 
 def format_draft_report(profile: VoiceProfile, report: DraftReport) -> str:

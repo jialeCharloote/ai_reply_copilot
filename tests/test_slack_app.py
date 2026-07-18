@@ -110,6 +110,24 @@ def test_drafts_view_renders_the_full_draft_in_a_section_block():
     assert any(long in b["text"]["text"] for b in sections)
 
 
+def test_drafts_view_flags_the_off_voice_candidate_under_its_draft():
+    # The hint has to sit with the draft it is about, before the pick — a small
+    # grey context block, because it is advice about register, not an error.
+    view = drafts_view(
+        "", "", ["ok 我看下", "Wonderful! 😊"], voice_hints=[[], ["emoji — you almost never use them"]]
+    )
+    blocks = view["blocks"]
+    contexts = [b for b in blocks if b["type"] == "context"]
+    assert len(contexts) == 1
+    assert "emoji" in contexts[0]["elements"][0]["text"]
+    hinted = next(i for i, b in enumerate(blocks) if b["type"] == "context")
+    assert "Wonderful" in blocks[hinted - 1]["text"]["text"]  # right under draft 2
+
+    # No hints, no extra blocks — the common case must not grow the modal.
+    plain = drafts_view("", "", ["ok 我看下", "Wonderful! 😊"])
+    assert not [b for b in plain["blocks"] if b["type"] == "context"]
+
+
 def test_drafts_view_respects_slack_option_limits():
     # Slack caps option text at 75 chars and option value at 150. Exceeding
     # either makes views_update fail with invalid_blocks — i.e. the modal simply

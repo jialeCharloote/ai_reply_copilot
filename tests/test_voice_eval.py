@@ -270,6 +270,151 @@ def test_against_saved_warns_when_the_pool_is_too_small(capsys):
     assert "only 2 drafts" in out
 
 
+# --- per-candidate hints: flag the off-voice draft BEFORE the user picks it ----
+
+
+def test_an_ai_flavored_candidate_is_hinted_with_specifics():
+    from ai_reply_copilot.voice_eval import off_voice_hints
+
+    hints = off_voice_hints(
+        _profile(),
+        "Thank you so much for the update! 😊 I will review the entire document "
+        "carefully tonight and send over my detailed thoughts tomorrow morning.",
+    )
+    joined = " ".join(hints)
+    assert "× longer" in joined
+    assert "emoji" in joined
+    assert "exclamation" in joined
+    assert "period" in joined
+
+
+def test_a_faithful_candidate_gets_no_hint():
+    from ai_reply_copilot.voice_eval import off_voice_hints
+
+    assert off_voice_hints(_profile(), "ok 我明天上午过一遍 timeline") == []
+    assert off_voice_hints(None, "anything at all") == []
+    assert off_voice_hints(VoiceProfile(), "anything at all") == []
+
+
+def test_hints_only_fire_on_habits_the_user_never_has():
+    # Someone who uses emoji half the time gets no emoji nag — a hint that
+    # fires on normal variation trains the user to ignore all of them.
+    from ai_reply_copilot.voice_eval import off_voice_hints
+
+    emoji_user = analyze_voice(["haha 😂 好", "ok 👍 收到", "nice 🎉 走起", "sure ✨ 明天见"])
+    assert off_voice_hints(emoji_user, "sounds good 😊") == []
+
+
+def test_a_moderately_longer_draft_is_tolerated_but_a_screenful_is_hinted():
+    # Intent can legitimately double a draft — a formal decline runs long. The
+    # per-candidate bar is "reads as a different person", far looser than the
+    # pool-level check.
+    from ai_reply_copilot.voice_eval import off_voice_hints
+
+    profile = _profile()  # median ~19 chars
+    assert off_voice_hints(profile, "ok 我看下, 不行的话我们就先按原来的 plan 走") == []
+    assert off_voice_hints(
+        profile,
+        "ok 我看下, 不行的话我们就先按原来的 plan 走, 然后我再和 design 那边把新的 timeline 对一遍, 对完发群里",
+    ) != []
+
+
+def test_language_is_deliberately_never_hinted_per_candidate():
+    # The reply language follows the conversation: an English work channel gets
+    # English drafts from a half-Chinese texter because resolve_language said
+    # so. A per-candidate language nag would fight that decision on every draft.
+    from ai_reply_copilot.voice_eval import off_voice_hints
+
+    assert off_voice_hints(_profile(), "sounds good, will send it tomorrow") == []
+
+
+def test_cli_suggest_flags_the_off_voice_candidate(chat_db, capsys, monkeypatch):
+    import json as _json
+
+    _save_my_voice()
+    fake_reply = {
+        "understanding": "Alex is asking about tonight.",
+        "candidates": [
+            "ok 我看下 明天答复你",
+            "Thank you so much for asking! 😊 I will absolutely confirm the timing "
+            "with everyone involved and circle back to you tomorrow morning.",
+        ],
+    }
+    from ai_reply_copilot.llm import FakeClient
+
+    monkeypatch.setattr(
+        cli, "get_client", lambda provider, model: FakeClient(_json.dumps(fake_reply))
+    )
+    code = cli.main(["suggest", "10", "--db", str(chat_db)])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert out.count("⚠") >= 1
+    # The faithful candidate is not nagged; the AI-flavored one is.
+    faithful_line = next(line for line in out.splitlines() if "ok 我看下" in line)
+    assert "⚠" not in faithful_line
+    assert "you almost never use them" in out
+
+    # --ignore-profile suppresses the voice AND the hints about it.
+    code = cli.main(["suggest", "10", "--db", str(chat_db), "--ignore-profile"])
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "⚠" not in out
+
+
+def test_cli_suggest_json_carries_hints_aligned_with_candidates(chat_db, capsys, monkeypatch):
+    import json as _json
+
+    _save_my_voice()
+    fake_reply = {
+        "understanding": "u",
+        "candidates": ["ok 我看下", "Wonderful news! 😊 Thank you so much for letting me know."],
+    }
+    from ai_reply_copilot.llm import FakeClient
+
+    monkeypatch.setattr(
+        cli, "get_client", lambda provider, model: FakeClient(_json.dumps(fake_reply))
+    )
+    code = cli.main(["suggest", "10", "--db", str(chat_db), "--json"])
+    payload = _json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert len(payload["voice_hints"]) == len(payload["candidates"])
+    assert payload["voice_hints"][0] == []
+    assert payload["voice_hints"][1] != []
+
+
+def test_reply_flow_prints_the_hint_before_the_pick():
+    import json as _json
+
+    from ai_reply_copilot.flow import run_reply_flow
+    from ai_reply_copilot.llm import FakeClient
+    from ai_reply_copilot.models import Message
+    from ai_reply_copilot.send import SendResult
+
+    fake = FakeClient(
+        _json.dumps(
+            {
+                "understanding": "u",
+                "candidates": ["ok 我看下", "Absolutely wonderful! 😊 Thank you so much!"],
+            }
+        )
+    )
+    out = []
+    answers = iter(["q"])
+    run_reply_flow(
+        [Message(text="dinner?", is_from_me=False, timestamp=None, sender="Alex")],
+        fake,
+        lambda text, dry_run: SendResult("imessage", "+1555", text, dry_run, "ok"),
+        voice_profile=_profile(),
+        prompt=lambda _msg: next(answers),
+        output=out.append,
+    )
+    rendered = "\n".join(out)
+    # The hint sits under the off-voice candidate, in the pick list itself —
+    # after the user has chosen is too late.
+    assert rendered.index("2. Absolutely wonderful") < rendered.index("⚠")
+    assert "⚠" not in rendered[: rendered.index("2. Absolutely")]  # faithful one unflagged
+
+
 def test_against_saved_without_a_voice_or_without_drafts_says_what_to_run(capsys):
     code = cli.main(["voice", "eval", "--against-saved"])
     err = capsys.readouterr().err

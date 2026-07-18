@@ -522,7 +522,7 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
 
     language, reason = _resolve_language(args, target, messages)
     client = get_client(provider=args.provider, model=args.model)
-    style, voice = _load_style_and_voice(args)
+    style, voice, voice_profile = _load_style_and_voice(args)
     suggestion = generate_replies(
         messages,
         client,
@@ -534,6 +534,10 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
         language=language,
         voice=voice,
     )
+    hints = [
+        voice_eval.off_voice_hints(voice_profile, candidate)
+        for candidate in suggestion.candidates
+    ]
 
     if args.json:
         print(
@@ -544,6 +548,9 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
                     "understanding": suggestion.understanding,
                     "open_points": suggestion.open_points,
                     "candidates": suggestion.candidates,
+                    # Aligned with candidates; a front-end can badge draft i
+                    # with voice_hints[i] instead of re-deriving the stats.
+                    "voice_hints": hints,
                     "language": language,
                     "sensitive": categories,
                 },
@@ -557,6 +564,8 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
     print(_format_understanding(suggestion))
     for index, candidate in enumerate(suggestion.candidates, start=1):
         print(f"{index}. {candidate}")
+        for hint in hints[index - 1]:
+            print(f"   ⚠ {hint}")
     return 0
 
 
@@ -644,7 +653,7 @@ def _cmd_reply(args: argparse.Namespace) -> int:
         print(_format_context_panel(messages, language, reason))
 
     llm_client = get_client(provider=args.provider, model=args.model)
-    style, voice = _load_style_and_voice(args)
+    style, voice, voice_profile = _load_style_and_voice(args)
     result = run_reply_flow(
         messages,
         llm_client,
@@ -658,15 +667,19 @@ def _cmd_reply(args: argparse.Namespace) -> int:
         auto_yes=args.yes,
         language=language,
         voice=voice,
+        voice_profile=voice_profile,
     )
     return 0 if result is not None else 1
 
 
 def _load_style_and_voice(args: argparse.Namespace):
-    """Style and learned voice, both suppressed by --ignore-profile."""
+    """Style, voice prompt block, and the raw voice profile — all suppressed by
+    --ignore-profile. The profile rides along so surfaces can hint per-candidate
+    deviations; hinting deviation from a voice we did not apply would be noise."""
     if getattr(args, "ignore_profile", False):
-        return None, None
-    return load_style_profile(), describe_for_prompt(load_voice())
+        return None, None, None
+    profile = load_voice()
+    return load_style_profile(), describe_for_prompt(profile), profile
 
 
 def _render_voice(profile) -> str:
