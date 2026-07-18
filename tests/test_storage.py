@@ -53,3 +53,38 @@ def test_record_and_load_feedback(home):
 def test_record_feedback_invalid_rating(home):
     with pytest.raises(ValueError):
         storage.record_feedback("bad", "x")
+
+
+# --- the draft log: what `voice eval --against-saved` scores --------------------
+
+
+def test_drafts_round_trip_oldest_first(home):
+    storage.record_drafts(["ok 我看下", "sounds good"], source="imessage", target="10")
+    storage.record_drafts(["on it"])
+    assert storage.load_recent_drafts() == ["ok 我看下", "sounds good", "on it"]
+    assert storage.load_recent_drafts(limit=2) == ["sounds good", "on it"]
+
+
+def test_empty_or_blank_candidates_are_not_logged(home):
+    assert storage.record_drafts(["", "   "]) is None
+    assert not storage.drafts_path().exists()
+    assert storage.load_recent_drafts() == []
+
+
+def test_a_corrupt_line_does_not_take_the_eval_down(home):
+    storage.record_drafts(["fine draft"])
+    with storage.drafts_path().open("a", encoding="utf-8") as handle:
+        handle.write("not json\n")
+    storage.record_drafts(["later draft"])
+    assert storage.load_recent_drafts() == ["fine draft", "later draft"]
+
+
+def test_the_draft_log_does_not_grow_forever(home):
+    # Drafts are derived from private conversations; an append-only log would
+    # quietly accumulate months of them on disk.
+    for index in range(0, storage._DRAFTS_KEEP + 40, 4):
+        storage.record_drafts([f"draft number {index + offset}" for offset in range(4)])
+    lines = storage.drafts_path().read_text(encoding="utf-8").splitlines()
+    assert len(lines) <= storage._DRAFTS_KEEP
+    # ...and it is the oldest drafts that were dropped, not the newest.
+    assert storage.load_recent_drafts(limit=1) == [f"draft number {storage._DRAFTS_KEEP + 39}"]

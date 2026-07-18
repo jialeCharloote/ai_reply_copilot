@@ -42,6 +42,7 @@ from .storage import (
     ConversationStoreError,
     forget_voice,
     get_conversation_language,
+    load_recent_drafts,
     load_style_profile,
     load_voice,
     profile_path,
@@ -51,6 +52,7 @@ from .storage import (
     set_conversation_language,
     voice_path,
 )
+from . import voice_eval
 from .voice import describe_for_prompt, learn_voice
 
 
@@ -262,6 +264,29 @@ def build_parser() -> argparse.ArgumentParser:
     _add_db_arg(p_voice_learn)
     voice_sub.add_parser("show", help="Show the learned voice (and what would be uploaded)")
     voice_sub.add_parser("forget", help="Delete the learned voice")
+    p_voice_eval = voice_sub.add_parser(
+        "eval",
+        help="Style-fidelity eval: score drafts against a voice, dimension by dimension",
+    )
+    eval_mode = p_voice_eval.add_mutually_exclusive_group()
+    eval_mode.add_argument(
+        "--against-saved",
+        action="store_true",
+        help="Score your recently generated drafts against your saved voice "
+        "(the drafts `suggest`/`reply` produced are logged locally for this)",
+    )
+    eval_mode.add_argument(
+        "--fixture",
+        default=None,
+        help="Eval set JSON with voice samples and labelled draft sets "
+        "(default: the bundled synthetic fixture — never real chats)",
+    )
+    p_voice_eval.add_argument(
+        "--last",
+        type=int,
+        default=50,
+        help="With --against-saved: how many recent drafts to score (default 50)",
+    )
 
     p_profile = sub.add_parser("profile", help="View or set your personal style")
     profile_sub = p_profile.add_subparsers(dest="profile_command", required=True)
@@ -497,7 +522,7 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
 
     language, reason = _resolve_language(args, target, messages)
     client = get_client(provider=args.provider, model=args.model)
-    style, voice = _load_style_and_voice(args)
+    style, voice, voice_profile = _load_style_and_voice(args)
     suggestion = generate_replies(
         messages,
         client,
@@ -509,6 +534,10 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
         language=language,
         voice=voice,
     )
+    hints = [
+        voice_eval.off_voice_hints(voice_profile, candidate)
+        for candidate in suggestion.candidates
+    ]
 
     if args.json:
         print(
@@ -519,6 +548,9 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
                     "understanding": suggestion.understanding,
                     "open_points": suggestion.open_points,
                     "candidates": suggestion.candidates,
+                    # Aligned with candidates; a front-end can badge draft i
+                    # with voice_hints[i] instead of re-deriving the stats.
+                    "voice_hints": hints,
                     "language": language,
                     "sensitive": categories,
                 },
@@ -532,6 +564,8 @@ def _cmd_suggest(args: argparse.Namespace) -> int:
     print(_format_understanding(suggestion))
     for index, candidate in enumerate(suggestion.candidates, start=1):
         print(f"{index}. {candidate}")
+        for hint in hints[index - 1]:
+            print(f"   ⚠ {hint}")
     return 0
 
 
@@ -619,7 +653,7 @@ def _cmd_reply(args: argparse.Namespace) -> int:
         print(_format_context_panel(messages, language, reason))
 
     llm_client = get_client(provider=args.provider, model=args.model)
-    style, voice = _load_style_and_voice(args)
+    style, voice, voice_profile = _load_style_and_voice(args)
     result = run_reply_flow(
         messages,
         llm_client,
@@ -633,15 +667,19 @@ def _cmd_reply(args: argparse.Namespace) -> int:
         auto_yes=args.yes,
         language=language,
         voice=voice,
+        voice_profile=voice_profile,
     )
     return 0 if result is not None else 1
 
 
 def _load_style_and_voice(args: argparse.Namespace):
-    """Style and learned voice, both suppressed by --ignore-profile."""
+    """Style, voice prompt block, and the raw voice profile — all suppressed by
+    --ignore-profile. The profile rides along so surfaces can hint per-candidate
+    deviations; hinting deviation from a voice we did not apply would be noise."""
     if getattr(args, "ignore_profile", False):
-        return None, None
-    return load_style_profile(), describe_for_prompt(load_voice())
+        return None, None, None
+    profile = load_voice()
+    return load_style_profile(), describe_for_prompt(profile), profile
 
 
 def _render_voice(profile) -> str:
@@ -677,6 +715,31 @@ def _cmd_voice(args: argparse.Namespace) -> int:
     if args.voice_command == "forget":
         print("Forgot the learned voice." if forget_voice() else "Nothing to forget.")
         return 0
+
+    if args.voice_command == "eval":
+        if args.against_saved:
+            # Measurement mode: the saved profile vs the drafts the product
+            # actually generated. Exit 1 means "the drafts are off-voice".
+            profile = load_voice()
+            if profile is None or not profile.sampled:
+                raise ValueError("no voice learned yet — run `charla voice learn` first")
+            drafts = load_recent_drafts(limit=args.last)
+            if not drafts:
+                raise ValueError(
+                    "no drafts logged yet — run `charla suggest` or `charla reply` "
+                    "a few times first (candidates are logged locally as they are generated)"
+                )
+            report = voice_eval.compare_drafts(profile, drafts)
+            print(voice_eval.format_draft_report(profile, report))
+            return 0 if report.faithful else 1
+
+        # Fixture mode: a self-check of the measuring stick. Exit 1 means the
+        # flags disagree with the fixture's labels — the eval stopped catching
+        # a labelled deviation or started flagging noise. Either way the ruler
+        # moved, which CI should refuse to let pass silently.
+        result = voice_eval.evaluate(voice_eval.load_eval_set(args.fixture))
+        print(voice_eval.format_report(result))
+        return 0 if result.agrees else 1
 
     # learn
     samples = sample_sent_messages(db_path=args.db, limit=args.sample)

@@ -201,6 +201,68 @@ The generation core stays dependency-free; only the Slack app needs `slack_bolt`
 The shared engine lives in `drafting.py`, so later surfaces (menu-bar app,
 browser extension) are thin front-ends over the same code.
 
+## Does it actually sound like you? (voice eval)
+
+`voice learn` measures how you write; nothing was measuring whether the drafts
+coming back *honour* that. The only signal was you filing `feedback not_like_me`
+— one anecdote at a time, after the fact. `charla voice eval` closes the loop:
+it scores a set of drafts with the **same statistics `analyze_voice` uses to
+learn your profile** (length, emoji, punctuation, capitalisation, questions,
+Chinese/English mix) and reports each dimension's deviation with a magnitude —
+"emoji on 0.80 of drafts vs your 0.00", "drafts ≈6× longer than you write" —
+never just "doesn't sound like you". It is deterministic and fully offline (no
+model call), so it works as a regression harness: change the prompt, rerun, see
+which dimension moved.
+
+```bash
+charla voice eval --against-saved       # YOUR saved voice vs YOUR recent drafts
+charla voice eval                       # self-check on the bundled synthetic fixture
+charla voice eval --fixture my.json     # self-check on your own eval set
+```
+
+`--against-saved` is the mode that answers the real question. Every candidate
+`suggest`/`reply`/the Slack app generates is appended to a local draft log
+(`drafts.jsonl`, capped, same local-only home as everything else — inspect or
+delete it like the rest), and the eval scores the last 50 of them against your
+saved profile. Exit 1 means the drafts are measurably off your voice. One run
+of `suggest` yields three candidates, and a rate over three drafts moves in
+steps of 0.33 — noise, not signal — so the eval reads a pool accumulated
+across runs and says so when the pool is still too small to trust.
+
+The no-flag form is the self-check: it runs the detector against a bundled
+labelled fixture and exits nonzero if the flags disagree with the labels —
+useful in CI to catch the measuring stick itself moving.
+
+The same statistics also work at draft time: a candidate that *severely*
+breaks your voice gets a one-line flag right in the pick list (CLI and Slack
+modal both) — "⚠ ≈4× longer than you usually write", "⚠ emoji — you almost
+never use them" — so the off-voice draft is visible before you pick it, not
+after you sent it. Deliberately conservative: it only fires on habits your
+messages basically never show and on drafts several times your length,
+because a warning that fires on normal variation trains you to ignore all of
+them. It also never flags language — the reply language follows the
+conversation on purpose (your English work channel gets English drafts), and
+nagging about it per candidate would fight that. `--ignore-profile` (or
+`CHARLA_NO_VOICE=1` for the Slack app) suppresses the voice and with it the
+flags; `--json` carries them as `voice_hints`, aligned with `candidates`, so
+front-ends can badge drafts without re-deriving the stats.
+
+The fixture pairs synthetic voice samples with labelled draft sets (one
+faithful, one in the default AI register, one that answers a bilingual texter
+in pure English — code-switching is a first-class dimension, so "这个 API 什么
+时候 deploy?" counts as the Chinese it is). Each set declares which dimensions
+it deliberately deviates on; the run exits nonzero if the eval misses a
+labelled deviation *or* flags beyond the labels, because either way the
+measuring stick moved.
+
+Two limits, honestly: the fixture is entirely invented — this repo is public,
+so no real chat content goes in it, which also means the numbers describe the
+detector, not any real person's voice. And matching every statistic is
+necessary, not sufficient: a draft can hit your length, emoji rate and
+punctuation and still not *sound* like you — word choice and rhythm live in the
+exemplars and the model, not in these counters. Red is reliable; all-green
+means "statistically consistent", not "indistinguishable from you".
+
 ## Development
 
 ```bash

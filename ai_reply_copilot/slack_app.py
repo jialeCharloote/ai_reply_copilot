@@ -25,7 +25,8 @@ from .models import Message, unanswered_index
 from .safety import describe_notice, describe_warning
 from .send import send_slack
 from .slack import SlackClient, SlackError
-from .storage import load_style_profile
+from .storage import load_style_profile, load_voice
+from .voice_eval import off_voice_hints
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,7 @@ def drafts_view(
     context: Optional[List[Message]] = None,
     open_points: Optional[List[str]] = None,
     language: Optional[str] = None,
+    voice_hints: Optional[List[List[str]]] = None,
 ) -> dict:
     blocks: List[dict] = []
     blocks.extend(context_blocks(context or [], language))
@@ -203,6 +205,22 @@ def drafts_view(
                 },
             }
         )
+        # A draft that severely breaks the learned voice is flagged right under
+        # it, before the pick — a context block, small and grey, because it is
+        # advice about register, not an error.
+        hints = voice_hints[number - 1] if voice_hints and number <= len(voice_hints) else []
+        if hints:
+            blocks.append(
+                {
+                    "type": "context",
+                    "elements": [
+                        {
+                            "type": "mrkdwn",
+                            "text": _truncate("⚠ " + "; ".join(hints), SECTION_TEXT_LIMIT),
+                        }
+                    ],
+                }
+            )
     blocks.append(
         {
             "type": "input",
@@ -363,6 +381,9 @@ def build_app(*, user_token: Optional[str] = None, llm_factory=None):
             )
             return
         _remember(drafts_by_view, view_id, suggestion.candidates)
+        # Hints only when the voice was actually applied: flagging deviation
+        # from a voice we did not ask for (CHARLA_NO_VOICE) would be noise.
+        profile = None if os.environ.get("CHARLA_NO_VOICE") else load_voice()
         client.views_update(
             view_id=view_id,
             view=drafts_view(
@@ -372,6 +393,10 @@ def build_app(*, user_token: Optional[str] = None, llm_factory=None):
                 context=context.messages,
                 open_points=suggestion.open_points,
                 language=suggestion.language,
+                voice_hints=[
+                    off_voice_hints(profile, candidate)
+                    for candidate in suggestion.candidates
+                ],
             ),
         )
 

@@ -49,6 +49,19 @@ def make_attributed_body(text: str) -> bytes:
     return prefix + marker + skip + length + body + b"\x86"
 
 
+@pytest.fixture(autouse=True)
+def isolated_home(tmp_path, monkeypatch):
+    """Point Charla's local state at a per-test directory.
+
+    ``generate_replies`` appends every candidate to a local draft log, so any
+    test that drafts would otherwise write into the developer's real
+    ``~/.ai_reply_copilot``. Tests that need a specific home still monkeypatch
+    their own — this only changes the default from "the real one" to "a fresh
+    empty one".
+    """
+    monkeypatch.setenv("AI_REPLY_COPILOT_HOME", str(tmp_path / "charla_home"))
+
+
 @pytest.fixture
 def chat_db(tmp_path) -> Path:
     """A temporary chat.db with two conversations of sample messages."""

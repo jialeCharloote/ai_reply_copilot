@@ -14,6 +14,7 @@ from .generate import generate_replies
 from .models import Message
 from .prompts import StyleProfile
 from .send import SendResult
+from .voice_eval import off_voice_hints
 
 
 def _edit_line(prompt_text: str, initial: str) -> str:
@@ -65,6 +66,7 @@ def run_reply_flow(
     auto_yes: bool = False,
     language: Optional[str] = None,
     voice: Optional[str] = None,
+    voice_profile=None,
     prompt: Optional[Callable[[str], str]] = None,
     output: Optional[Callable[[str], None]] = None,
     edit: Optional[Callable[[str, str], str]] = None,
@@ -100,6 +102,11 @@ def run_reply_flow(
     output("")
     for index, candidate in enumerate(suggestion.candidates, start=1):
         output(f"{index}. {candidate}")
+        # Flag a candidate that severely breaks the learned voice *before* the
+        # user picks it — the whole point of learning a voice is lost if the
+        # off-voice draft is chosen because nothing said so.
+        for hint in off_voice_hints(voice_profile, candidate):
+            output(f"   ⚠ {hint}")
 
     choice = prompt(
         "\nPick a number to send, e<n> to edit, or q to cancel: "
